@@ -28,7 +28,12 @@ export interface WorkbookParseResult {
  * - Auto-detects store code (KDTK/Kode Toko) and store name (Nama Toko/Nama)
  * - Auto-detects indicators (% NKL, Rp Penggantian NKL, Type SO, Toko Fresh, Korlap, Saldo, JOP, Tanggal Buka)
  */
-export function parseSmartWorkbook(wb: XLSX.WorkBook): WorkbookParseResult {
+export function parseSmartWorkbook(
+  wb: XLSX.WorkBook,
+  preferredSheetName: string = 'MASTER TOKO BALI',
+  targetMonth: string = '09',
+  targetYear: string = '2026'
+): WorkbookParseResult {
   const sheetResults: SheetParseResult[] = [];
 
   // Build global store-to-korlap mapping across all sheets (e.g. sheet ALL TOKO (2) or JADWAL)
@@ -495,7 +500,9 @@ export function parseSmartWorkbook(wb: XLSX.WorkBook): WorkbookParseResult {
 
       const rawForParsing = soSeptemberRaw || genericScheduleRaw;
       if (rawForParsing) {
-        const parsedCurrent = parseCurrentMonthSODate(rawForParsing, '09', '2026');
+        const effectiveM = (targetMonth && targetMonth !== 'ALL') ? targetMonth : '09';
+        const effectiveY = (targetYear && targetYear !== 'ALL') ? targetYear : '2026';
+        const parsedCurrent = parseCurrentMonthSODate(rawForParsing, effectiveM, effectiveY);
         if (parsedCurrent.isValid && parsedCurrent.isoDate) {
           activeScheduledDateIso = parsedCurrent.isoDate;
           activeTglSo = parsedCurrent.displayDate;
@@ -848,43 +855,66 @@ export function parseSmartWorkbook(wb: XLSX.WorkBook): WorkbookParseResult {
         if (sched.stockRp > 0) st.saldoToko = sched.stockRp;
         if (sched.kasToko > 0) st.kasToko = sched.kasToko;
         if (sched.asInitial) st.as = sched.asInitial;
-      } else if (SATURDAY_STORES_SET.has(codeKey)) {
-        st.scheduledDate = '2026-09-12';
-        st.tglSo = '12 Sep 2026';
-        st.soSeptember = '12 Sep 2026';
-        st.dayName = 'SABTU';
       }
     });
   });
 
-  // Prioritize comprehensive master store sheet (e.g. "ALL TOKO (2)", "MASTER TOKO BALI", "DATA TOKO")
-  const sheetWithMaxStores = sheetResults.reduce<SheetParseResult | null>((best, current) => {
-    if (!best) return current;
-    return current.stores.length > best.stores.length ? current : best;
-  }, null);
-
-  // Look for sheets explicitly indicating master/all store database
-  const masterCandidates = sheetResults.filter(s => {
-    const u = s.sheetName.toUpperCase();
-    return u.includes('MASTER') || u.includes('ALL TOKO') || u.includes('DATA TOKO') || u.includes('TOKO');
-  });
-
-  const bestMasterCandidate = masterCandidates.reduce<SheetParseResult | null>((best, current) => {
-    if (!best) return current;
-    return current.stores.length > best.stores.length ? current : best;
-  }, null);
-
-  // If the sheet with max stores has significantly more stores (e.g. 700 vs 182),
-  // pick the comprehensive master sheet to prevent dropping hundreds of stores
+  // Prioritize comprehensive master store sheet (Strictly prioritizing MASTER TOKO BALI)
   let bestSheet: SheetParseResult | null = null;
-  if (sheetWithMaxStores && bestMasterCandidate) {
-    if (sheetWithMaxStores.stores.length > bestMasterCandidate.stores.length * 1.3) {
-      bestSheet = sheetWithMaxStores;
-    } else {
-      bestSheet = bestMasterCandidate;
+  const cleanPref = preferredSheetName ? preferredSheetName.trim().toUpperCase().replace(/[\s_-]/g, '') : '';
+
+  // 1. If preferredSheetName was explicitly provided:
+  if (cleanPref) {
+    bestSheet = sheetResults.find(s => {
+      const sClean = s.sheetName.trim().toUpperCase().replace(/[\s_-]/g, '');
+      return sClean === cleanPref || sClean.includes(cleanPref) || cleanPref.includes(sClean);
+    }) || null;
+  }
+
+  // 2. Prioritize sheets explicitly named "MASTER TOKO BALI" (standard operational master)
+  if (!bestSheet) {
+    bestSheet = sheetResults.find(s => {
+      const u = s.sheetName.trim().toUpperCase().replace(/[\s_-]/g, '');
+      return u === 'MASTERTOKOBALI' || u.includes('MASTERTOKOBALI') || (u.includes('MASTER') && u.includes('BALI'));
+    }) || null;
+  }
+
+  // 3. Next fallback: Sheet containing 'MASTER TOKO'
+  if (!bestSheet) {
+    bestSheet = sheetResults.find(s => {
+      const u = s.sheetName.trim().toUpperCase().replace(/[\s_-]/g, '');
+      return u.includes('MASTERTOKO');
+    }) || null;
+  }
+
+  // 4. Next fallback: Sheet containing 'MASTER' with store schedules/dates
+  if (!bestSheet) {
+    const masterWithDates = sheetResults.filter(s => {
+      const u = s.sheetName.toUpperCase();
+      return u.includes('MASTER') && s.stores.some(st => st.scheduledDate || st.soSeptember || st.tglSo);
+    });
+    if (masterWithDates.length > 0) {
+      bestSheet = masterWithDates.reduce((best, cur) => cur.stores.length > best.stores.length ? cur : best);
     }
-  } else {
-    bestSheet = bestMasterCandidate || sheetWithMaxStores;
+  }
+
+  // 5. Next fallback: Sheet containing 'MASTER', 'ALL TOKO', or 'DATA TOKO'
+  if (!bestSheet) {
+    const masterCandidates = sheetResults.filter(s => {
+      const u = s.sheetName.toUpperCase();
+      return u.includes('MASTER') || u.includes('ALL TOKO') || u.includes('DATA TOKO') || u.includes('TOKO');
+    });
+    if (masterCandidates.length > 0) {
+      bestSheet = masterCandidates.reduce((best, cur) => cur.stores.length > best.stores.length ? cur : best);
+    }
+  }
+
+  // 6. Absolute fallback: sheet with maximum stores
+  if (!bestSheet) {
+    bestSheet = sheetResults.reduce<SheetParseResult | null>((best, current) => {
+      if (!best) return current;
+      return current.stores.length > best.stores.length ? current : best;
+    }, null);
   }
 
   if (bestSheet && extractedSchedules.length > 0) {

@@ -497,8 +497,17 @@ export async function syncMasterStoresFromSpreadsheet(
     const { workbook, sourceMethod } = await fetchGoogleSpreadsheetWorkbook(urlOrId, preferredSheetName);
     
     // 2. Parse workbook using smart Master Toko Bali parser
-    const parseResult = parseSmartWorkbook(workbook);
-    const activeSheet: SheetParseResult | null = parseResult.activeSheet;
+    const parseResult = parseSmartWorkbook(workbook, preferredSheetName, targetMonth, targetYear);
+    let activeSheet: SheetParseResult | null = parseResult.activeSheet;
+
+    // Strict authority guard: If MASTER TOKO BALI is present in parsed sheets, enforce it as the definitive active sheet
+    const masterTokoBaliSheet = parseResult.allSheets.find(s => {
+      const u = s.sheetName.trim().toUpperCase().replace(/[\s_-]/g, '');
+      return u === 'MASTERTOKOBALI' || u.includes('MASTERTOKOBALI') || (u.includes('MASTER') && u.includes('BALI'));
+    });
+    if (masterTokoBaliSheet && masterTokoBaliSheet.stores.length > 0) {
+      activeSheet = masterTokoBaliSheet;
+    }
 
     if (!activeSheet || !activeSheet.stores || activeSheet.stores.length === 0) {
       throw new Error(`Tidak ditemukan data toko pada sheet '${preferredSheetName}'. Pastikan kolom KDTK dan NAMA TOKO tersedia.`);

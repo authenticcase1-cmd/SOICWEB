@@ -891,6 +891,7 @@ export function enrichScheduleWithMasterStore(schedule: SOSchedule, store?: Stor
     kasToko,
     typeSo,
     zona,
+    soAktiva: store.soAktiva || schedule.soAktiva || 'Tidak',
     asInitial,
     region,
     dayName: day,

@@ -190,7 +190,7 @@ export const MasterTokoManager: React.FC<MasterTokoManagerProps> = ({
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
 
-        const result = parseSmartWorkbook(wb);
+        const result = parseSmartWorkbook(wb, 'MASTER TOKO BALI');
         setParsedSheetResults(result.allSheets);
 
         if (!result.activeSheet || result.activeSheet.stores.length === 0) {

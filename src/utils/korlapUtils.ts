@@ -68,6 +68,7 @@ export const KORLAP_PROFILES: KorlapProfile[] = [
       'wayan angga rista',
       'wayan angga',
       'angga rista',
+      'angga',
       'wayan',
       'rista',
       'tim wayan angga',
@@ -117,6 +118,8 @@ export const KORLAP_PROFILES: KorlapProfile[] = [
       'tim bisma',
       'team bisma',
       'group bisma',
+      'bujanga',
+      'bujangga',
       'putu'
     ],
     defaultLeader: 'GEDE ARIASA'
@@ -210,6 +213,7 @@ export function normalizeKorlapName(rawInput?: string | null): string {
   if (
     stripped === 'wayan' ||
     stripped === 'rista' ||
+    stripped === 'angga' ||
     stripped === 'angga rista' ||
     stripped === 'wayan angga' ||
     stripped === 'wayan angga rista' ||
@@ -250,7 +254,11 @@ export function normalizeKorlapName(rawInput?: string | null): string {
   if (
     stripped === 'bisma' ||
     stripped === 'putu bisma' ||
-    stripped.includes('bisma')
+    stripped === 'bujanga' ||
+    stripped === 'bujangga' ||
+    stripped.includes('bisma') ||
+    stripped.includes('bujanga') ||
+    stripped.includes('bujangga')
   ) {
     return 'PUTU BISMA';
   }
@@ -320,7 +328,7 @@ export function isKorlapMatch(
     if (candLower.includes('odi') || candLower.includes('ardiyansyah') || candLower.includes('ardian') || candLower.includes('ardi')) {
       return false;
     }
-    return candLower.includes('wayan') || candLower.includes('rista') || candLower.includes('angga rista') || candLower === 'tim 1' || candLower === 'team 1';
+    return candLower === 'angga' || candLower.includes('wayan') || candLower.includes('rista') || candLower.includes('angga rista') || candLower === 'tim 1' || candLower === 'team 1';
   }
 
   // If searching for ABDUL RAHMAN
@@ -335,7 +343,7 @@ export function isKorlapMatch(
 
   // If searching for PUTU BISMA
   if (normTarget === 'PUTU BISMA') {
-    return candLower.includes('bisma') || candLower.includes('ariasa') || candLower.includes('putu');
+    return candLower.includes('bisma') || candLower.includes('bujanga') || candLower.includes('bujangga') || candLower.includes('ariasa') || candLower.includes('putu');
   }
 
   return false;
