@@ -392,19 +392,6 @@ export function autoSyncStoreWithApprovedSchedule(
 export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09', targetYear: string = '2026'): { isoDate: string; rawVal: string } {
   if (!st) return { isoDate: '', rawVal: '' };
 
-  // Special Saturday SO in September 2026 rule:
-  // In the operational schedule (sheet JADWAL), exactly 12 stores are scheduled for Saturday, 12 September 2026.
-  const SATURDAY_STORES_SEP_2026 = new Set([
-    'TD8L', 'TEEK', 'T8TZ', 'T1X2', 'FQ18', 'FEVA', 'FOFL', 'T1FF', 'T5DA', 'FTZZ', 'F4SD', 'TECP'
-  ]);
-  const codeUpper = (st.code || '').trim().toUpperCase();
-  const isSaturdayStore = SATURDAY_STORES_SEP_2026.has(codeUpper) || 
-    (st.dayName && st.dayName.trim().toUpperCase() === 'SABTU');
-
-  if (isSaturdayStore && (targetMonth === '09' || targetMonth === 'ALL')) {
-    return { isoDate: '2026-09-12', rawVal: '12 Sep 2026' };
-  }
-
   const anySt = st as any;
   let rawDateVal = '';
 
@@ -501,7 +488,7 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
     }
     // Also check generic 'TGL SO' or 'JADWAL SO' keys if still empty
     if (!isValValid(rawDateVal)) {
-      for (const k of ['TGL SO', 'TANGGAL SO', 'JADWAL SO', 'TGL_SO', 'SO', 'Jadwal SO', 'TGL', 'TANGGAL', 'JADWAL', 'TGL SO BALI', 'TGL SO SEP', 'TGL AUDIT']) {
+      for (const k of ['TGL SO', 'TANGGAL SO', 'JADWAL SO', 'TGL_SO', 'Jadwal SO', 'TGL SO BALI', 'TGL SO SEP', 'TGL AUDIT', 'TGL AUDIT SO', 'TGL JADWAL', 'TGL JADWAL SO']) {
         if (isValValid(anySt[k])) {
           rawDateVal = String(anySt[k]);
           break;

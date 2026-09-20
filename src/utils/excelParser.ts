@@ -483,38 +483,44 @@ export function parseSmartWorkbook(wb: XLSX.WorkBook): WorkbookParseResult {
       // Generic SO schedule date (e.g. from a monthly master sheet with header "TGL SO" or "JADWAL SO")
       const genericScheduleRaw = findVal([
         'tgl so', 'tanggal so', 'jadwal so', 'tgl jadwal so', 'tgl pelaksanaan so', 
-        'tgl pelaksanaan', 'tanggal pelaksanaan', 'jadwal pelaksanaan', 'jadwal', 'tanggal', 
-        'tgl rencana so', 'rencana so', 'tgl audit so', 'so periode ini', 'so bulan ini'
+        'tgl pelaksanaan', 'tanggal pelaksanaan', 'jadwal pelaksanaan', 'jadwal so bali',
+        'tgl rencana so', 'rencana so', 'tgl audit so', 'tgl audit', 'so periode ini', 'so bulan ini'
       ]);
       const genericScheduleDate = formatSmartSODate(genericScheduleRaw);
 
-      // Determine active scheduled date: MUST strictly come from current schedule period (generic or September SO),
-      // NEVER fall back to historical past months like August (soAgustusRaw) or July!
+      // Determine active scheduled date: Prioritize explicit current month column (e.g. SO SEPTEMBER '26),
+      // then generic SO schedule column.
       let activeScheduledDateIso: string | undefined = undefined;
       let activeTglSo: string | undefined = undefined;
 
-      const rawForParsing = genericScheduleRaw || soSeptemberRaw;
+      const rawForParsing = soSeptemberRaw || genericScheduleRaw;
       if (rawForParsing) {
-        const parsed = parseSmartDate(rawForParsing);
-        if (parsed) {
-          const m = String(parsed.getMonth() + 1).padStart(2, '0');
-          const d = String(parsed.getDate()).padStart(2, '0');
-          const y = String(parsed.getFullYear());
-          // Only assign active scheduled date if it belongs to current schedule period (September / 09 or explicit generic)
-          if (m === '09' || genericScheduleRaw) {
-            activeScheduledDateIso = `${y}-${m}-${d}`;
-            activeTglSo = formatSmartSODate(rawForParsing);
-          }
+        const parsedCurrent = parseCurrentMonthSODate(rawForParsing, '09', '2026');
+        if (parsedCurrent.isValid && parsedCurrent.isoDate) {
+          activeScheduledDateIso = parsedCurrent.isoDate;
+          activeTglSo = parsedCurrent.displayDate;
+          if (!soSeptember || soSeptember === '-') soSeptember = parsedCurrent.displayDate;
+        } else {
+          const parsed = parseSmartDate(rawForParsing);
+          if (parsed) {
+            const m = String(parsed.getMonth() + 1).padStart(2, '0');
+            const d = String(parsed.getDate()).padStart(2, '0');
+            const y = String(parsed.getFullYear());
+            if (m === '09' || genericScheduleRaw) {
+              activeScheduledDateIso = `${y}-${m}-${d}`;
+              activeTglSo = formatSmartSODate(rawForParsing);
+            }
 
-          if (m === '09' && (!soSeptember || soSeptember === '-')) soSeptember = activeTglSo;
-          else if (m === '10' && (!soOktober || soOktober === '-')) soOktober = formatSmartSODate(rawForParsing);
-          else if (m === '11' && (!soNovember || soNovember === '-')) soNovember = formatSmartSODate(rawForParsing);
-          else if (m === '12' && (!soDesember || soDesember === '-')) soDesember = formatSmartSODate(rawForParsing);
-        } else if (!hasSpecificSeptemberCol && (!soSeptember || soSeptember === '-') && genericScheduleDate && genericScheduleDate !== '-') {
-          soSeptember = genericScheduleDate;
-          activeTglSo = genericScheduleDate;
-          const iso = formatDateISO(genericScheduleDate);
-          if (iso) activeScheduledDateIso = iso;
+            if (m === '09' && (!soSeptember || soSeptember === '-')) soSeptember = activeTglSo;
+            else if (m === '10' && (!soOktober || soOktober === '-')) soOktober = formatSmartSODate(rawForParsing);
+            else if (m === '11' && (!soNovember || soNovember === '-')) soNovember = formatSmartSODate(rawForParsing);
+            else if (m === '12' && (!soDesember || soDesember === '-')) soDesember = formatSmartSODate(rawForParsing);
+          } else if (!hasSpecificSeptemberCol && (!soSeptember || soSeptember === '-') && genericScheduleDate && genericScheduleDate !== '-') {
+            soSeptember = genericScheduleDate;
+            activeTglSo = genericScheduleDate;
+            const iso = formatDateISO(genericScheduleDate);
+            if (iso) activeScheduledDateIso = iso;
+          }
         }
       } else if (soSeptember && soSeptember !== '-') {
         activeTglSo = soSeptember;
@@ -612,19 +618,11 @@ export function parseSmartWorkbook(wb: XLSX.WorkBook): WorkbookParseResult {
       const personilVal = findVal(['personil', 'leader', 'nama personil', 'auditor']);
       const hariVal = findVal(['hari', 'day', 'hari so']);
 
-      // 12 stores specifically scheduled for Saturday, 12 September 2026 in the operational plan
-      const SATURDAY_STORES_SEP_2026 = new Set([
-        'TD8L', 'TEEK', 'T8TZ', 'T1X2', 'FQ18', 'FEVA', 'FOFL', 'T1FF', 'T5DA', 'FTZZ', 'F4SD', 'TECP'
-      ]);
-      const isSaturday = SATURDAY_STORES_SEP_2026.has(storeCode.trim().toUpperCase()) ||
-        hariVal.toUpperCase().includes('SABTU') ||
-        activeScheduledDateIso === '2026-09-05' ||
-        soSeptember === '5 Sep 2026';
-
-      if (isSaturday) {
+      const isSaturday = hariVal.toUpperCase().includes('SABTU');
+      if (isSaturday && !activeScheduledDateIso) {
         activeScheduledDateIso = '2026-09-12';
-        soSeptember = '12 Sep 2026';
-        activeTglSo = '12 Sep 2026';
+        if (!soSeptember || soSeptember === '-') soSeptember = '12 Sep 2026';
+        if (!activeTglSo || activeTglSo === '-') activeTglSo = '12 Sep 2026';
       }
 
       const storeObj: Store = {
@@ -764,21 +762,23 @@ export function parseSmartWorkbook(wb: XLSX.WorkBook): WorkbookParseResult {
       const zonaRaw = String(row[jZonaIdx] || '').trim();
       const asRaw = String(row[jAsIdx] || '').trim();
 
-      const isSaturday = day === 'SABTU' || SATURDAY_STORES_SET.has(code) || String(tglRaw).trim() === '46270';
       let schedDate = '2026-09-01';
-
-      if (isSaturday) {
+      const parsedTgl = parseCurrentMonthSODate(tglRaw, '09', '2026');
+      if (parsedTgl.isValid && parsedTgl.isoDate) {
+        schedDate = parsedTgl.isoDate;
+      } else if (day === 'SABTU' || SATURDAY_STORES_SET.has(code)) {
         schedDate = '2026-09-12';
         day = 'SABTU';
-      } else {
-        const parsedTgl = parseCurrentMonthSODate(tglRaw, '09', '2026');
-        if (parsedTgl.isValid) {
-          schedDate = parsedTgl.isoDate;
-        } else if (day === 'SELASA') schedDate = '2026-09-01';
-        else if (day === 'RABU') schedDate = '2026-09-02';
-        else if (day === 'KAMIS') schedDate = '2026-09-03';
-        else if (day === 'JUMAT') schedDate = '2026-09-04';
-        else if (day === 'SENIN') schedDate = '2026-09-07';
+      } else if (day === 'SELASA') {
+        schedDate = '2026-09-01';
+      } else if (day === 'RABU') {
+        schedDate = '2026-09-02';
+      } else if (day === 'KAMIS') {
+        schedDate = '2026-09-03';
+      } else if (day === 'JUMAT') {
+        schedDate = '2026-09-04';
+      } else if (day === 'SENIN') {
+        schedDate = '2026-09-07';
       }
 
       const canonicalKorlap = normalizeKorlapName(group) || group || globalStoreKorlapMap.get(code) || resolveStoreDefaultKorlap({ name }) || 'Belum Ditentukan';

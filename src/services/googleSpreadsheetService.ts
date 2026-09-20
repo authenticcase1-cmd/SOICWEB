@@ -15,7 +15,10 @@ import {
   untrackDeletedIdsForItems,
   untrackDeletedMasterDataset,
   normalizeSingleActiveDataset,
-  cleanForFirestore
+  cleanForFirestore,
+  recordDeletedId,
+  deleteScheduleFromFirestore,
+  cleanAllDatabaseDuplicates
 } from './storageService';
 
 export interface GoogleSpreadsheetConfig {
@@ -540,10 +543,18 @@ export async function syncMasterStoresFromSpreadsheet(
       existingScheds,
       targetMonth,
       targetYear,
-      { isReplaceMode: false }
+      { isReplaceMode: true }
     );
 
     const updatedSchedules = scheduleSyncResult.updatedSchedules;
+
+    // Purge any stale / ghost schedules from date changes or deleted schedules
+    if (scheduleSyncResult.staleScheduleIdsToDelete && scheduleSyncResult.staleScheduleIdsToDelete.length > 0) {
+      scheduleSyncResult.staleScheduleIdsToDelete.forEach(staleId => {
+        recordDeletedId(STORAGE_KEYS.SCHEDULES, staleId);
+        deleteScheduleFromFirestore(staleId).catch(() => {});
+      });
+    }
 
     // 4. INSTANT OPTIMISTIC LOCAL PERSISTENCE (< 10ms)
     // Write directly to LocalStorage and broadcast events so the UI updates in real-time
@@ -607,12 +618,13 @@ export async function syncMasterStoresFromSpreadsheet(
     }
 
     // 7. Non-blocking Firestore & Cloudinary persistence in background!
-    // This allows the user to see the result instantly (< 1 second) without waiting for sequential network batch commits
+    // We use isReplaceMode: true so Firestore deletes any stale ghost documents from date changes
     Promise.allSettled([
-      saveStores(finalStores, false),
-      saveSchedules(updatedSchedules, false),
+      saveStores(finalStores, true),
+      saveSchedules(updatedSchedules, true),
       saveMasterTokoDatasets(updatedDatasets),
-      saveSpreadsheetConfig(newConfig)
+      saveSpreadsheetConfig(newConfig),
+      cleanAllDatabaseDuplicates()
     ]).catch(err => console.warn('Background sync persistence notice:', err));
 
     return {

@@ -14,7 +14,8 @@ import {
   Database,
   ArrowRight,
   PowerOff,
-  Unlink
+  Unlink,
+  Trash2
 } from 'lucide-react';
 import { 
   extractSpreadsheetInfo, 
@@ -24,6 +25,7 @@ import {
   syncMasterStoresFromSpreadsheet,
   SpreadsheetSyncResult 
 } from '../../services/googleSpreadsheetService';
+import { cleanAllDatabaseDuplicates } from '../../services/storageService';
 import { Store, SOSchedule } from '../../types/stockOpname';
 
 interface SpreadsheetSyncModalProps {
@@ -54,6 +56,8 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
   const [lastResult, setLastResult] = useState<SpreadsheetSyncResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
+  const [isCleaningResidue, setIsCleaningResidue] = useState(false);
+  const [residueNotice, setResidueNotice] = useState<string | null>(null);
 
   // Load existing config on open
   useEffect(() => {
@@ -109,6 +113,20 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
       setErrorMessage(err?.message || 'Gagal menonaktifkan sinkronisasi.');
     } finally {
       setIsDeactivating(false);
+    }
+  };
+
+  const handleCleanResidue = async () => {
+    setIsCleaningResidue(true);
+    setResidueNotice(null);
+    setErrorMessage(null);
+    try {
+      const report = await cleanAllDatabaseDuplicates();
+      setResidueNotice(`Pembersihan tuntas: Berhasil menghapus ${report.purgedCount} dokumen residu & duplikat dari Firestore dan cache.`);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Gagal membersihkan residu database.');
+    } finally {
+      setIsCleaningResidue(false);
     }
   };
 
@@ -387,6 +405,48 @@ export const SpreadsheetSyncModal: React.FC<SpreadsheetSyncModalProps> = ({
               <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
             </label>
           </div>
+
+          {/* Database & Cache Residue Cleaning Card */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 shrink-0">
+                <Trash2 className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-900">
+                  Bersihkan Residu Cache & Duplikat Firestore
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Hapus dokumen jadwal hantu/residu lama jika tanggal spreadsheet baru saja diedit.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleCleanResidue}
+              disabled={isCleaningResidue || isLoading}
+              className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-xs font-bold rounded-xl transition flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
+            >
+              {isCleaningResidue ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Membersihkan...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Bersihkan Residu</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {residueNotice && (
+            <div className="p-3 bg-teal-50 border border-teal-200 rounded-2xl flex items-center gap-2 text-xs text-teal-900 font-medium animate-fadeIn">
+              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+              <span>{residueNotice}</span>
+            </div>
+          )}
 
           {/* Sharing Permissions Guide Card */}
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 text-xs">

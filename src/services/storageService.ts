@@ -390,9 +390,10 @@ export function getDeterministicStoreId(item: Partial<Store>): string {
 
 export function getDeterministicScheduleId(item: Partial<SOSchedule>): string {
   const storeKey = (item.storeCode || item.storeId || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  const dateKey = (item.scheduledDate || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  if (storeKey && dateKey) {
-    return `sch_${storeKey}_${dateKey}`.slice(0, 45);
+  const dt = String(item.scheduledDate || '').trim();
+  const ym = dt.length >= 7 ? dt.slice(0, 7).replace(/[^a-zA-Z0-9]/g, '') : 'gen';
+  if (storeKey) {
+    return `sch_${storeKey}_${ym}`.slice(0, 45);
   }
   return item.id && !item.id.startsWith('AUTO-SCHED-') && !item.id.startsWith('SCHED-') ? item.id : `sch_${Date.now()}`;
 }
@@ -500,6 +501,13 @@ export function deduplicateEntityList<T extends { id: string }>(
       const bt = (it.batchTitle || it.personnelName || '').toLowerCase();
       const dt = (it.receivedDate || '').toLowerCase();
       return `unif_${cat}_${bt}_${dt}`;
+    }
+    if (collectionName === 'schedules') {
+      const sc = (it.storeCode || it.storeId || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      const dt = String(it.scheduledDate || '').trim();
+      const ym = dt.length >= 7 ? dt.slice(0, 7) : 'gen';
+      if (sc) return `sch_${sc}_${ym}`;
+      return `id_${it.id}`;
     }
     if (collectionName === 'results') {
       if (it.scheduleId) return `sch_${it.scheduleId}`;
@@ -1968,6 +1976,7 @@ export async function cleanAllDatabaseDuplicates(): Promise<{
   let totalPurgedAll = 0;
 
   const collectionsToClean = [
+    { key: STORAGE_KEYS.SCHEDULES, col: 'schedules' },
     { key: STORAGE_KEYS.EQUIPMENT, col: 'equipment' },
     { key: STORAGE_KEYS.PERSONNEL, col: 'personnel' },
     { key: STORAGE_KEYS.STORES, col: 'stores' },

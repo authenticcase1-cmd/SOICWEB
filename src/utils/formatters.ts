@@ -167,9 +167,6 @@ export function parseSmartDateWithContext(dateStr: any, contextMonth?: string, c
     : (!rawStr.includes('-') && !rawStr.includes('/') && /^\d+(\.\d+)?$/.test(rawStr) ? parseFloat(rawStr) : NaN);
 
   if (!isNaN(numericVal) && numericVal > 20000 && numericVal < 80000) {
-    if (numericVal === 46270) {
-      return new Date(2026, 8, 12);
-    }
     // Excel 1900 date system leap year offset: 25569 days from 1970-01-01
     const utcMs = Math.round((numericVal - 25569) * 86400000);
     const d = new Date(utcMs);
@@ -177,9 +174,6 @@ export function parseSmartDateWithContext(dateStr: any, contextMonth?: string, c
       const y = d.getUTCFullYear();
       const m = d.getUTCMonth();
       const dt = d.getUTCDate();
-      if (y === 2026 && m === 8 && dt === 5) {
-        return new Date(2026, 8, 12);
-      }
       return new Date(y, m, dt);
     }
   }
@@ -364,25 +358,12 @@ export function parseCurrentMonthSODate(
   // 2. Excel serial number e.g. 46274
   const numVal = Number(rawStr);
   if (!isNaN(numVal) && numVal > 20000 && numVal < 80000) {
-    // Special operational handling: 46270 is Saturday SO in September 2026, officially scheduled on 12 Sep 2026
-    if (numVal === 46270) {
-      return {
-        isoDate: '2026-09-12',
-        displayDate: '12 Sep 2026',
-        dayNumber: 12,
-        isValid: true
-      };
-    }
     const utcMs = Math.round((numVal - 25569) * 86400000);
     const dateObj = new Date(utcMs);
     if (!isNaN(dateObj.getTime())) {
-      let y = dateObj.getUTCFullYear();
-      let m = dateObj.getUTCMonth();
-      let d = dateObj.getUTCDate();
-      // Operational Saturday calendar mapping: 5 Sep 2026 -> 12 Sep 2026
-      if (y === 2026 && m === 8 && d === 5) {
-        d = 12;
-      }
+      const y = dateObj.getUTCFullYear();
+      const m = dateObj.getUTCMonth();
+      const d = dateObj.getUTCDate();
       const mPad = String(m + 1).padStart(2, '0');
       const dPad = String(d).padStart(2, '0');
       return {

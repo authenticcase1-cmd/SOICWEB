@@ -706,23 +706,6 @@ export default function App() {
       });
     }
 
-    // Specialized Saturday September 2026 handling:
-    // Ensure all 12 Saturday stores are strictly mapped to 2026-09-12 with dayName = 'SABTU'
-    const SATURDAY_STORES_SEP_2026 = new Set([
-      'TD8L', 'TEEK', 'T8TZ', 'T1X2', 'FQ18', 'FEVA', 'FOFL', 'T1FF', 'T5DA', 'FTZZ', 'F4SD', 'TECP'
-    ]);
-    updatedSchedules = updatedSchedules.map(sch => {
-      const code = (sch.storeCode || '').trim().toUpperCase();
-      if (SATURDAY_STORES_SEP_2026.has(code) || sch.dayName === 'SABTU' || sch.scheduledDate === '2026-09-05') {
-        return {
-          ...sch,
-          scheduledDate: '2026-09-12',
-          dayName: 'SABTU'
-        };
-      }
-      return sch;
-    });
-
     // If active dataset has extractedSchedules (from sheet JADWAL), merge missing ones and rich team/personil info
     if (activeDs?.extractedSchedules && activeDs.extractedSchedules.length > 0) {
       const schedMap = new Map<string, SOSchedule>();
