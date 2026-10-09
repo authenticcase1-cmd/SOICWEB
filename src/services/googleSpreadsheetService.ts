@@ -20,6 +20,7 @@ import {
   deleteScheduleFromFirestore,
   cleanAllDatabaseDuplicates
 } from './storageService';
+import { getFullMonthNameIndo } from '../utils/formatters';
 
 export interface GoogleSpreadsheetConfig {
   url: string;
@@ -454,9 +455,13 @@ export async function syncMasterStoresFromSpreadsheet(
     existingSchedules?: SOSchedule[];
   } = {}
 ): Promise<SpreadsheetSyncResult> {
-  const targetMonth = options.targetMonth || '09';
-  const targetYear = options.targetYear || '2026';
+  const now = new Date();
+  const defaultCalMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const defaultCalYear = String(now.getFullYear());
+  const targetMonth = options.targetMonth || defaultCalMonth;
+  const targetYear = options.targetYear || defaultCalYear;
   const preferredSheetName = options.preferredSheetName || 'MASTER TOKO BALI';
+  const periodOrQuarterStr = `${getFullMonthNameIndo(targetMonth)} ${targetYear}`;
 
   if (isSpreadsheetSyncRunning) {
     const localStores = getStoredStores();
@@ -467,7 +472,7 @@ export async function syncMasterStoresFromSpreadsheet(
       sheetName: preferredSheetName,
       allSheetNames: [],
       sourceMethod: 'In-Flight Throttled',
-      periodOrQuarter: `September ${targetYear}`,
+      periodOrQuarter: periodOrQuarterStr,
       message: 'Sinkronisasi Google Spreadsheet sedang berjalan...'
     };
   }
@@ -486,7 +491,7 @@ export async function syncMasterStoresFromSpreadsheet(
       sheetName: '',
       allSheetNames: [],
       sourceMethod: '',
-      periodOrQuarter: `September ${targetYear}`,
+      periodOrQuarter: periodOrQuarterStr,
       message: errorMsg,
       error: errorMsg
     };
@@ -499,6 +504,11 @@ export async function syncMasterStoresFromSpreadsheet(
     // 2. Parse workbook using smart Master Toko Bali parser
     const parseResult = parseSmartWorkbook(workbook, preferredSheetName, targetMonth, targetYear);
     let activeSheet: SheetParseResult | null = parseResult.activeSheet;
+
+    // Resolve intelligent detected active period (e.g. automatically promotes to October 2026)
+    const effectiveTargetMonth = parseResult.detectedMonth || targetMonth;
+    const effectiveTargetYear = parseResult.detectedYear || targetYear;
+    const effectivePeriodOrQuarter = parseResult.detectedPeriodStr || `${getFullMonthNameIndo(effectiveTargetMonth)} ${effectiveTargetYear}`;
 
     // Strict authority guard: If MASTER TOKO BALI is present in parsed sheets, enforce it as the definitive active sheet
     const masterTokoBaliSheet = parseResult.allSheets.find(s => {
@@ -550,8 +560,8 @@ export async function syncMasterStoresFromSpreadsheet(
     const scheduleSyncResult = syncSchedulesFromMasterStores(
       finalStores,
       existingScheds,
-      targetMonth,
-      targetYear,
+      effectiveTargetMonth,
+      effectiveTargetYear,
       { isReplaceMode: true }
     );
 
@@ -584,7 +594,7 @@ export async function syncMasterStoresFromSpreadsheet(
       uploadDate: new Date().toISOString(),
       storesCount: finalStores.length,
       isActiveForScheduling: true,
-      periodOrQuarter: `September ${targetYear}`,
+      periodOrQuarter: effectivePeriodOrQuarter,
       indicatorList: activeSheet.indicators || ['Type SO', 'KORLAP/OFFICER SO', 'NKL'],
       notes: `Disinkronkan otomatis dari Google Spreadsheet (${sourceMethod}) pada ${new Date().toLocaleTimeString('id-ID')}.`,
       stores: finalStores
@@ -604,6 +614,17 @@ export async function syncMasterStoresFromSpreadsheet(
     
     localStorage.setItem(STORAGE_KEYS.MASTER_TOKO_DATASETS, JSON.stringify(updatedDatasets));
     notifyDataChanged(STORAGE_KEYS.MASTER_TOKO_DATASETS, updatedDatasets);
+
+    // Broadcast period update event so App.tsx and UI adapt instantly
+    try {
+      window.dispatchEvent(new CustomEvent('spreadsheet_synced_period', {
+        detail: {
+          month: effectiveTargetMonth,
+          year: effectiveTargetYear,
+          periodOrQuarter: effectivePeriodOrQuarter
+        }
+      }));
+    } catch {}
 
     // 6. Update spreadsheet configuration record in LocalStorage
     const statusMsg = `Berhasil membaca ${finalStores.length} toko dan ${updatedSchedules.length} jadwal SO dari sheet '${activeSheet.sheetName}' (${sourceMethod}).`;
@@ -643,7 +664,7 @@ export async function syncMasterStoresFromSpreadsheet(
       sheetName: activeSheet.sheetName,
       allSheetNames: workbook.SheetNames,
       sourceMethod,
-      periodOrQuarter: `September ${targetYear}`,
+      periodOrQuarter: periodOrQuarterStr,
       message: statusMsg
     };
   } catch (err: any) {

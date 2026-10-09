@@ -1,6 +1,7 @@
 import { Store, SOSchedule, SOResult, SOTeam, DashboardSummary, AuditorPersonnel, SOEquipment, EquipmentRepairLog, UniformRecord, MasterTokoDataset, OnCallPersonnelRecord } from '../types/stockOpname';
 import { ensureStoreCoordinates } from '../utils/geoUtils';
 import { getStoreSOApprovalStatus, isStoreZonaHitam, isStoreSOApprovedInMonth, extractStoreSODateForPeriod } from '../utils/storeSyncUtils';
+import { getDefaultTargetSoTypes, getCurrentCalendarMonth, getCurrentCalendarYear } from '../utils/formatters';
 import { db } from './firebase';
 import { collection, doc, setDoc, deleteDoc, onSnapshot, getDocs, getDoc, setLogLevel, disableNetwork, writeBatch } from 'firebase/firestore';
 import { uploadToCloudinary, getCloudinaryConfig, getFormattedDateSuffix, uploadRawJsonToCloudinary, fetchCloudinaryJsonBackup } from './cloudinaryService';
@@ -2492,10 +2493,10 @@ export function getDashboardSummary(
   stores: Store[], 
   schedules: SOSchedule[], 
   results: SOResult[],
-  targetTypes: string[] = ['M', 'Q3'],
+  targetTypes?: string[],
   allResults?: SOResult[],
-  targetMonth: string = '09',
-  targetYear: string = '2026'
+  targetMonth: string = getCurrentCalendarMonth(),
+  targetYear: string = getCurrentCalendarYear()
 ): DashboardSummary {
   const totalStores = stores.length;
   const now = new Date();
@@ -2556,8 +2557,9 @@ export function getDashboardSummary(
   const zonaHitamBelumSO = Math.max(0, totalZonaHitam - zonaHitamTerSO);
   const achievePercentZonaHitam = totalZonaHitam > 0 ? Math.round((zonaHitamTerSO / totalZonaHitam) * 100) : 0;
 
-  // ------------------- TOKO WAJIB SO (TYPE SO M & Q3 / TARGET TYPES) METRICS ------------------- //
-  const normalizedTargetTypes = (targetTypes && targetTypes.length > 0 ? targetTypes : ['M', 'Q3']).map(t => t.trim().toUpperCase());
+  // ------------------- TOKO WAJIB SO (TARGET TYPES e.g. M & Q1 for Oct, M & Q3 for Sep) METRICS ------------------- //
+  const effectiveTargetTypes = (targetTypes && targetTypes.length > 0) ? targetTypes : getDefaultTargetSoTypes(activeMonth);
+  const normalizedTargetTypes = effectiveTargetTypes.map(t => t.trim().toUpperCase());
   
   // Breakdown per type container
   const breakdownTypeSO: Record<string, { total: number; terSO: number; belumSO: number }> = {};
