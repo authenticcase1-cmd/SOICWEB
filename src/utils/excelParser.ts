@@ -1,7 +1,16 @@
 import * as XLSX from 'xlsx';
 import { Store, SOSchedule } from '../types/stockOpname';
 import { parseCoordinates, autoSyncStoreRegionAndKabupaten } from './geoUtils';
-import { formatSmartSODate, parseSmartDate, formatDateISO, parseCurrentMonthSODate } from './formatters';
+import { 
+  formatSmartSODate, 
+  parseSmartDate, 
+  formatDateISO, 
+  parseCurrentMonthSODate,
+  getDefaultQTypeForMonth,
+  getFullMonthNameIndo,
+  getCurrentCalendarMonth,
+  getCurrentCalendarYear
+} from './formatters';
 import { normalizeKorlapName, resolveStoreDefaultKorlap } from './korlapUtils';
 import { getDeterministicStoreId } from '../services/storageService';
 import { isStoreZonaHitam } from './storeSyncUtils';
@@ -12,11 +21,17 @@ export interface SheetParseResult {
   indicators: string[];
   rawHeaders: string[];
   extractedSchedules?: SOSchedule[];
+  detectedMonth?: string;
+  detectedYear?: string;
+  detectedPeriodStr?: string;
 }
 
 export interface WorkbookParseResult {
   allSheets: SheetParseResult[];
   activeSheet: SheetParseResult | null;
+  detectedMonth?: string;
+  detectedYear?: string;
+  detectedPeriodStr?: string;
 }
 
 /**
@@ -31,8 +46,8 @@ export interface WorkbookParseResult {
 export function parseSmartWorkbook(
   wb: XLSX.WorkBook,
   preferredSheetName: string = 'MASTER TOKO BALI',
-  targetMonth: string = '09',
-  targetYear: string = '2026'
+  targetMonth?: string,
+  targetYear?: string
 ): WorkbookParseResult {
   const sheetResults: SheetParseResult[] = [];
 
@@ -288,6 +303,49 @@ export function parseSmartWorkbook(
       }
     }
 
+    // Intelligently detect effective scheduling month & year for this sheet
+    const now = new Date();
+    const currentCalMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const currentCalYear = String(now.getFullYear());
+
+    const colKeysClean = colKeys.map(k => k.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const hasOctober = colKeysClean.some(k => k.includes('oktober') || k.includes('okt') || k.includes('october') || k.includes('oct'));
+    const hasSeptember = colKeysClean.some(k => k.includes('september') || k.includes('sep'));
+    const hasNovember = colKeysClean.some(k => k.includes('november') || k.includes('nov'));
+    const hasDecember = colKeysClean.some(k => k.includes('desember') || k.includes('des'));
+    const hasAugust = colKeysClean.some(k => k.includes('agustus') || k.includes('ags') || k.includes('agt'));
+
+    let effectiveM = (targetMonth && targetMonth !== 'ALL') ? targetMonth : '';
+    let effectiveY = (targetYear && targetYear !== 'ALL') ? targetYear : currentCalYear;
+
+    // Smart Month Rollover & Column Authority:
+    // If targetMonth is unspecified OR if targetMonth was from an older month (e.g. '09')
+    // while the sheet contains an updated October column (or current calendar month is October),
+    // automatically promote effectiveM to October ('10') so updated sheets are read seamlessly!
+    if (!effectiveM || (effectiveM === '09' && (hasOctober || currentCalMonth === '10'))) {
+      if (currentCalMonth === '10' && hasOctober) {
+        effectiveM = '10';
+      } else if (currentCalMonth === '11' && hasNovember) {
+        effectiveM = '11';
+      } else if (currentCalMonth === '12' && hasDecember) {
+        effectiveM = '12';
+      } else if (hasOctober) {
+        effectiveM = '10';
+      } else if (hasNovember) {
+        effectiveM = '11';
+      } else if (hasDecember) {
+        effectiveM = '12';
+      } else if (hasSeptember && currentCalMonth === '09') {
+        effectiveM = '09';
+      } else if (hasSeptember && !hasOctober) {
+        effectiveM = '09';
+      } else if (hasAugust) {
+        effectiveM = '08';
+      } else {
+        effectiveM = currentCalMonth;
+      }
+    }
+
     for (let r = dataStartIdx; r < rawMatrix.length; r++) {
       const row = rawMatrix[r];
       if (!Array.isArray(row) || row.length === 0) continue;
@@ -334,7 +392,18 @@ export function parseSmartWorkbook(
           }
         }
 
-        // 2. Word boundary regex match (avoids matching substring inside 'nama toko' or 'alamat')
+        // 2. Normalized alphanumeric match (removes punctuation, spaces, quotes)
+        for (const key of possibleKeys) {
+          const cleanTarget = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (!cleanTarget) continue;
+          const matchedKey = rowKeys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanTarget);
+          if (matchedKey) {
+            const v = rowObj[matchedKey];
+            return (v !== undefined && v !== null) ? String(v).trim() : '';
+          }
+        }
+
+        // 3. Word boundary regex match (avoids matching substring inside 'nama toko' or 'alamat')
         for (const key of possibleKeys) {
           const regex = new RegExp(`(?:^|[^a-zA-Z0-9])${key.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')}(?:$|[^a-zA-Z0-9])`, 'i');
           const matchedKey = rowKeys.find(k => regex.test(k.trim()));
@@ -467,22 +536,35 @@ export function parseSmartWorkbook(
         const lk = k.trim().toLowerCase();
         return lk.includes('september') || lk.includes('sep 26') || lk.includes('so sep') || lk.includes("so september '");
       });
+      const hasSpecificOktoberCol = rowKeys.some(k => {
+        const lk = k.trim().toLowerCase();
+        return lk.includes('oktober') || lk.includes('okt 26') || lk.includes('so okt') || lk.includes("so oktober '");
+      });
 
-      const tglSoMei = formatSmartSODate(findVal(["so mei '", "so mei '26", 'so mei 2026', 'so mei', 'tgl so mei', 'mei']));
-      const tglSoJuni = formatSmartSODate(findVal(["so juni '", "so juni '26", 'so juni 2026', 'so juni', 'tgl so juni', 'juni']));
-      const tglSoJuli = formatSmartSODate(findVal(["so juli '", "so juli '26", 'so juli 2026', 'so juli', 'tgl so juli', 'juli']));
-      const soAgustusRaw = findVal(["so agustus '", "so agustus '26", 'so agustus 2026', 'so agustus', 'tgl so agustus', 'agustus', 'so ags']);
+      const tglSoMei = formatSmartSODate(findVal(["so mei '", "so mei '26", 'so mei 2026', 'so mei', 'tgl so mei', 'mei', 'may']));
+      const tglSoJuni = formatSmartSODate(findVal(["so juni '", "so juni '26", 'so juni 2026', 'so juni', 'tgl so juni', 'juni', 'so jun', 'jun']));
+      const tglSoJuli = formatSmartSODate(findVal(["so juli '", "so juli '26", 'so juli 2026', 'so juli', 'tgl so juli', 'juli', 'so jul', 'jul']));
+      const soAgustusRaw = findVal(["so agustus '", "so agustus '26", 'so agustus 2026', 'so agustus', 'tgl so agustus', 'agustus', 'so ags 26', 'so ags', 'so agt 26', 'so agt', 'ags', 'agt']);
       const soAgustus = formatSmartSODate(soAgustusRaw);
       const soSeptemberRaw = findVal([
         "so september '", "so september '26", 'so september 2026', 'so september', 'tgl so september', 
         'september \'26', 'september 2026', 'september', 'so sep 26', 'so sep \'26', 'so sep', 'tgl so sep', 'sep \'26', 'sep 26', 'sep'
       ]);
       let soSeptember = formatSmartSODate(soSeptemberRaw);
-      const soOktoberRaw = findVal(["so oktober '", "so oktober '26", 'so oktober 2026', 'so oktober', 'tgl so oktober', 'oktober', 'so okt']);
+      const soOktoberRaw = findVal([
+        "so oktober '", "so oktober '26", 'so oktober 2026', 'so oktober', 'tgl so oktober', 
+        'oktober \'26', 'oktober 2026', 'oktober', 'so okt 26', 'so okt \'26', 'so okt', 'tgl so okt', 'okt \'26', 'okt 26', 'okt', 'october', 'so oct'
+      ]);
       let soOktober = formatSmartSODate(soOktoberRaw);
-      const soNovemberRaw = findVal(["so november '", "so november '26", 'so november 2026', 'so november', 'tgl so november', 'november', 'so nov']);
+      const soNovemberRaw = findVal([
+        "so november '", "so november '26", 'so november 2026', 'so november', 'tgl so november', 
+        'november \'26', 'november 2026', 'november', 'so nov 26', 'so nov \'26', 'so nov', 'tgl so nov', 'nov \'26', 'nov 26', 'nov'
+      ]);
       let soNovember = formatSmartSODate(soNovemberRaw);
-      const soDesemberRaw = findVal(["so desember '", "so desember '26", 'so desember 2026', 'so desember', 'tgl so desember', 'desember', 'so des']);
+      const soDesemberRaw = findVal([
+        "so desember '", "so desember '26", 'so desember 2026', 'so desember', 'tgl so desember', 
+        'desember \'26', 'desember 2026', 'desember', 'so des 26', 'so des \'26', 'so des', 'tgl so des', 'des \'26', 'des 26', 'des'
+      ]);
       let soDesember = formatSmartSODate(soDesemberRaw);
       
       // Generic SO schedule date (e.g. from a monthly master sheet with header "TGL SO" or "JADWAL SO")
@@ -493,46 +575,70 @@ export function parseSmartWorkbook(
       ]);
       const genericScheduleDate = formatSmartSODate(genericScheduleRaw);
 
-      // Determine active scheduled date: Prioritize explicit current month column (e.g. SO SEPTEMBER '26),
-      // then generic SO schedule column.
+      // Determine active scheduled date dynamically according to effectiveM (Oktober, September, etc.)
       let activeScheduledDateIso: string | undefined = undefined;
       let activeTglSo: string | undefined = undefined;
 
-      const rawForParsing = soSeptemberRaw || genericScheduleRaw;
+      let rawForParsing = '';
+      if (effectiveM === '10') rawForParsing = soOktoberRaw;
+      else if (effectiveM === '09') rawForParsing = soSeptemberRaw;
+      else if (effectiveM === '11') rawForParsing = soNovemberRaw;
+      else if (effectiveM === '12') rawForParsing = soDesemberRaw;
+      else if (effectiveM === '08') rawForParsing = soAgustusRaw;
+      else if (effectiveM === '07') rawForParsing = tglSoJuli;
+      else if (effectiveM === '06') rawForParsing = tglSoJuni;
+      else if (effectiveM === '05') rawForParsing = tglSoMei;
+
+      if (!rawForParsing) {
+        rawForParsing = genericScheduleRaw;
+      }
+
       if (rawForParsing) {
-        const effectiveM = (targetMonth && targetMonth !== 'ALL') ? targetMonth : '09';
-        const effectiveY = (targetYear && targetYear !== 'ALL') ? targetYear : '2026';
         const parsedCurrent = parseCurrentMonthSODate(rawForParsing, effectiveM, effectiveY);
         if (parsedCurrent.isValid && parsedCurrent.isoDate) {
           activeScheduledDateIso = parsedCurrent.isoDate;
           activeTglSo = parsedCurrent.displayDate;
-          if (!soSeptember || soSeptember === '-') soSeptember = parsedCurrent.displayDate;
+          if (effectiveM === '10' && (!soOktober || soOktober === '-')) soOktober = parsedCurrent.displayDate;
+          if (effectiveM === '09' && (!soSeptember || soSeptember === '-')) soSeptember = parsedCurrent.displayDate;
         } else {
           const parsed = parseSmartDate(rawForParsing);
           if (parsed) {
             const m = String(parsed.getMonth() + 1).padStart(2, '0');
             const d = String(parsed.getDate()).padStart(2, '0');
             const y = String(parsed.getFullYear());
-            if (m === '09' || genericScheduleRaw) {
+            if (m === effectiveM || genericScheduleRaw) {
               activeScheduledDateIso = `${y}-${m}-${d}`;
               activeTglSo = formatSmartSODate(rawForParsing);
             }
 
-            if (m === '09' && (!soSeptember || soSeptember === '-')) soSeptember = activeTglSo;
-            else if (m === '10' && (!soOktober || soOktober === '-')) soOktober = formatSmartSODate(rawForParsing);
-            else if (m === '11' && (!soNovember || soNovember === '-')) soNovember = formatSmartSODate(rawForParsing);
-            else if (m === '12' && (!soDesember || soDesember === '-')) soDesember = formatSmartSODate(rawForParsing);
-          } else if (!hasSpecificSeptemberCol && (!soSeptember || soSeptember === '-') && genericScheduleDate && genericScheduleDate !== '-') {
-            soSeptember = genericScheduleDate;
-            activeTglSo = genericScheduleDate;
-            const iso = formatDateISO(genericScheduleDate);
-            if (iso) activeScheduledDateIso = iso;
+            if (m === '09' && (!soSeptember || soSeptember === '-')) soSeptember = activeTglSo || formatSmartSODate(rawForParsing);
+            else if (m === '10' && (!soOktober || soOktober === '-')) soOktober = activeTglSo || formatSmartSODate(rawForParsing);
+            else if (m === '11' && (!soNovember || soNovember === '-')) soNovember = activeTglSo || formatSmartSODate(rawForParsing);
+            else if (m === '12' && (!soDesember || soDesember === '-')) soDesember = activeTglSo || formatSmartSODate(rawForParsing);
+          } else if (genericScheduleDate && genericScheduleDate !== '-') {
+            if (effectiveM === '10' && !hasSpecificOktoberCol && (!soOktober || soOktober === '-')) {
+              soOktober = genericScheduleDate;
+              activeTglSo = genericScheduleDate;
+              const iso = formatDateISO(genericScheduleDate);
+              if (iso) activeScheduledDateIso = iso;
+            } else if (effectiveM === '09' && !hasSpecificSeptemberCol && (!soSeptember || soSeptember === '-')) {
+              soSeptember = genericScheduleDate;
+              activeTglSo = genericScheduleDate;
+              const iso = formatDateISO(genericScheduleDate);
+              if (iso) activeScheduledDateIso = iso;
+            }
           }
         }
-      } else if (soSeptember && soSeptember !== '-') {
-        activeTglSo = soSeptember;
-        const iso = formatDateISO(soSeptember);
-        if (iso) activeScheduledDateIso = iso;
+      } else {
+        if (effectiveM === '10' && soOktober && soOktober !== '-') {
+          activeTglSo = soOktober;
+          const iso = formatDateISO(soOktober);
+          if (iso) activeScheduledDateIso = iso;
+        } else if (effectiveM === '09' && soSeptember && soSeptember !== '-') {
+          activeTglSo = soSeptember;
+          const iso = formatDateISO(soSeptember);
+          if (iso) activeScheduledDateIso = iso;
+        }
       }
 
       // Explicit SPV approval date ONLY (must NOT match generic "tgl so")
@@ -586,7 +692,7 @@ export function parseSmartWorkbook(
           sUpper.includes('PENDING') || 
           sUpper.includes('AUDIT ULANG') ||
           sUpper.includes('BELUM APPROVE') ||
-          sUpper.includes('SELESAI') // execution finished but pending SPV approval
+          sUpper.includes('SELESAI')
         ) {
           statusApproveSO = 'Belum Terapprove';
         } else {
@@ -602,21 +708,59 @@ export function parseSmartWorkbook(
       if (freqRaw && !isNaN(Number(freqRaw))) {
         frekuensiTidakSO = Number(freqRaw);
       } else {
-        // Calculate based on monthly columns
-        const monthsChecked = [
-          tglSoMei && tglSoMei !== '-',
-          tglSoJuni && tglSoJuni !== '-',
-          tglSoJuli && tglSoJuli !== '-',
-          soAgustus && soAgustus !== '-',
-          soSeptember && soSeptember !== '-'
-        ];
-        if (soSeptember && soSeptember !== '-') {
-          frekuensiTidakSO = 0;
-        } else {
-          for (let m = 4; m >= 0; m--) {
-            if (!monthsChecked[m]) frekuensiTidakSO++;
-            else break;
+        // Calculate dynamically based on monthly columns up to effective month
+        const hasMei = tglSoMei && tglSoMei !== '-';
+        const hasJuni = tglSoJuni && tglSoJuni !== '-';
+        const hasJuli = tglSoJuli && tglSoJuli !== '-';
+        const hasAgs = soAgustus && soAgustus !== '-';
+        const hasSep = soSeptember && soSeptember !== '-';
+        const hasOkt = soOktober && soOktober !== '-';
+
+        if (effectiveM === '10') {
+          if (hasOkt) {
+            frekuensiTidakSO = 0;
+          } else {
+            const hist = [hasMei, hasJuni, hasJuli, hasAgs, hasSep];
+            for (let m = 4; m >= 0; m--) {
+              if (!hist[m]) frekuensiTidakSO++;
+              else break;
+            }
           }
+        } else if (effectiveM === '09') {
+          if (hasSep) {
+            frekuensiTidakSO = 0;
+          } else {
+            const hist = [hasMei, hasJuni, hasJuli, hasAgs];
+            for (let m = 3; m >= 0; m--) {
+              if (!hist[m]) frekuensiTidakSO++;
+              else break;
+            }
+          }
+        } else if (effectiveM === '11') {
+          const hasNov = soNovember && soNovember !== '-';
+          if (hasNov) {
+            frekuensiTidakSO = 0;
+          } else {
+            const hist = [hasMei, hasJuni, hasJuli, hasAgs, hasSep, hasOkt];
+            for (let m = 5; m >= 0; m--) {
+              if (!hist[m]) frekuensiTidakSO++;
+              else break;
+            }
+          }
+        } else if (effectiveM === '12') {
+          const hasDes = soDesember && soDesember !== '-';
+          if (hasDes) {
+            frekuensiTidakSO = 0;
+          } else {
+            const hist = [hasMei, hasJuni, hasJuli, hasAgs, hasSep, hasOkt, soNovember && soNovember !== '-'];
+            for (let m = 6; m >= 0; m--) {
+              if (!hist[m]) frekuensiTidakSO++;
+              else break;
+            }
+          }
+        } else {
+          if (hasAgs) frekuensiTidakSO = 0;
+          else frekuensiTidakSO = 1;
         }
       }
 
@@ -624,12 +768,30 @@ export function parseSmartWorkbook(
       const groupVal = findVal(['group', 'grup']);
       const personilVal = findVal(['personil', 'leader', 'nama personil', 'auditor']);
       const hariVal = findVal(['hari', 'day', 'hari so']);
-
       const isSaturday = hariVal.toUpperCase().includes('SABTU');
-      if (isSaturday && !activeScheduledDateIso) {
-        activeScheduledDateIso = '2026-09-12';
-        if (!soSeptember || soSeptember === '-') soSeptember = '12 Sep 2026';
-        if (!activeTglSo || activeTglSo === '-') activeTglSo = '12 Sep 2026';
+
+      // Normalize Type SO (M, Q1, Q2, Q3) with dynamic month-quarter intelligence
+      let cleanTypeSo = (typeSoVal || 'M').trim().toUpperCase();
+      const naturalQType = getDefaultQTypeForMonth(effectiveM); // e.g. Q1 for Oktober (10), Q3 for September (09)
+      
+      if (cleanTypeSo.includes('Q1')) {
+        cleanTypeSo = 'Q1';
+      } else if (cleanTypeSo.includes('Q2')) {
+        cleanTypeSo = 'Q2';
+      } else if (cleanTypeSo.includes('Q3')) {
+        // If master has transitioned to October (month 10) and this store is scheduled in October,
+        // or if the spreadsheet's Q criteria has advanced to Q1:
+        if (effectiveM === '10' && (soOktoberRaw || (soOktober && soOktober !== '-') || activeScheduledDateIso?.includes('-10-'))) {
+          cleanTypeSo = 'Q1';
+        } else {
+          cleanTypeSo = 'Q3';
+        }
+      } else if (cleanTypeSo.startsWith('Q') || cleanTypeSo === 'QUARTER' || cleanTypeSo === 'TRIWULAN') {
+        cleanTypeSo = naturalQType;
+      } else if (cleanTypeSo.includes('M') || cleanTypeSo.includes('BULAN') || cleanTypeSo === 'REGULER') {
+        cleanTypeSo = 'M';
+      } else {
+        cleanTypeSo = 'M';
       }
 
       const storeObj: Store = {
@@ -649,8 +811,8 @@ export function parseSmartWorkbook(
         as: asVal,
         saldoToko: saldoTokoNum,
         coverage: coverageVal || 'DC',
-        typeSo: typeSoVal || 'M',
-        qm: typeSoVal || 'M',
+        typeSo: cleanTypeSo,
+        qm: cleanTypeSo,
         smartClassification: findVal(['perubahan', 'kategori', 'klasifikasi', 'turun kelas']) || '',
         korlap: korlap || (groupVal ? (normalizeKorlapName(groupVal) || groupVal) : undefined) || globalStoreKorlapMap.get(storeCode) || resolveStoreDefaultKorlap({ kabupaten: kabVal, region: region, as: asVal, am: amVal, name: storeName, address: addressVal }),
         keterangan: ketVal,
@@ -690,7 +852,10 @@ export function parseSmartWorkbook(
       sheetName,
       stores: storesList,
       indicators: Array.from(detectedInds),
-      rawHeaders: colKeys
+      rawHeaders: colKeys,
+      detectedMonth: effectiveM,
+      detectedYear: effectiveY,
+      detectedPeriodStr: `${getFullMonthNameIndo(effectiveM)} ${effectiveY}`
     });
   }
 
@@ -891,7 +1056,7 @@ export function parseSmartWorkbook(
   if (!bestSheet) {
     const masterWithDates = sheetResults.filter(s => {
       const u = s.sheetName.toUpperCase();
-      return u.includes('MASTER') && s.stores.some(st => st.scheduledDate || st.soSeptember || st.tglSo);
+      return u.includes('MASTER') && s.stores.some(st => st.scheduledDate || st.soOktober || st.soSeptember || st.tglSo);
     });
     if (masterWithDates.length > 0) {
       bestSheet = masterWithDates.reduce((best, cur) => cur.stores.length > best.stores.length ? cur : best);
@@ -921,8 +1086,15 @@ export function parseSmartWorkbook(
     bestSheet.extractedSchedules = extractedSchedules;
   }
 
+  const detectedMonth = bestSheet?.detectedMonth || getCurrentCalendarMonth();
+  const detectedYear = bestSheet?.detectedYear || getCurrentCalendarYear();
+  const detectedPeriodStr = bestSheet?.detectedPeriodStr || `${getFullMonthNameIndo(detectedMonth)} ${detectedYear}`;
+
   return {
     allSheets: sheetResults,
-    activeSheet: bestSheet
+    activeSheet: bestSheet,
+    detectedMonth,
+    detectedYear,
+    detectedPeriodStr
   };
 }

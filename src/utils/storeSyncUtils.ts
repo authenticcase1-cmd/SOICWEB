@@ -1,5 +1,14 @@
 import { Store, SOSchedule, SOResult } from '../types/stockOpname';
-import { formatSmartSODate, formatDateISO, parseSmartDate, parseSmartDateWithContext, parseCurrentMonthSODate, detectSmartMonthAndYear } from './formatters';
+import { 
+  formatSmartSODate, 
+  formatDateISO, 
+  parseSmartDate, 
+  parseSmartDateWithContext, 
+  parseCurrentMonthSODate, 
+  detectSmartMonthAndYear,
+  getCurrentCalendarMonth,
+  getCurrentCalendarYear
+} from './formatters';
 import { normalizeKorlapName, resolveStoreDefaultKorlap } from './korlapUtils';
 import { generateInitialStores, generateInitialSchedules } from '../data/initialData';
 
@@ -290,7 +299,7 @@ export function isStoreSOApprovedInMonth(
  */
 export function calculateStoreFrekuensiTidakSO(
   store: Store,
-  currentMonth: string = '09'
+  currentMonth: string = getCurrentCalendarMonth()
 ): number {
   if (!store) return 0;
 
@@ -301,21 +310,26 @@ export function calculateStoreFrekuensiTidakSO(
   };
 
   const history = [
-    hasSO(store.tglSoMei),
-    hasSO(store.tglSoJuni),
-    hasSO(store.tglSoJuli),
-    hasSO(store.soAgustus),
-    hasSO(store.soSeptember)
+    hasSO(store.tglSoMei),       // 0: Mei (05)
+    hasSO(store.tglSoJuni),      // 1: Juni (06)
+    hasSO(store.tglSoJuli),      // 2: Juli (07)
+    hasSO(store.soAgustus),      // 3: Agt (08)
+    hasSO(store.soSeptember),    // 4: Sep (09)
+    hasSO(store.soOktober),      // 5: Okt (10)
+    hasSO(store.soNovember),     // 6: Nov (11)
+    hasSO(store.soDesember)      // 7: Des (12)
   ];
 
-  // If already SO'd in current active month (September), frequency is 0
-  if (currentMonth === '09' && history[4]) {
+  const mNum = parseInt(currentMonth, 10);
+  const activeIdx = (mNum >= 5 && mNum <= 12) ? (mNum - 5) : 5;
+
+  // If already SO'd in current active month, frequency is 0
+  if (history[activeIdx]) {
     return 0;
   }
 
   // Count consecutive months not SO'd leading up to active month
   let count = 0;
-  const activeIdx = currentMonth === '09' ? 4 : (currentMonth === '08' ? 3 : 2);
   for (let i = activeIdx; i >= 0; i--) {
     if (!history[i]) {
       count++;
@@ -349,8 +363,8 @@ export function autoSyncStoreWithApprovedSchedule(
   if (!dateStr) return store;
 
   const parts = dateStr.split('-');
-  const month = parts[1] || '09';
-  const year = parts[0] || '2026';
+  const month = parts[1] || getCurrentCalendarMonth();
+  const year = parts[0] || getCurrentCalendarYear();
 
   const updated: Store = { ...store };
   updated.lastSODate = dateStr;
@@ -363,8 +377,14 @@ export function autoSyncStoreWithApprovedSchedule(
   }
 
   // Populate month specific field
-  if (month === '09') {
+  if (month === '10') {
+    updated.soOktober = dateStr;
+  } else if (month === '09') {
     updated.soSeptember = dateStr;
+  } else if (month === '11') {
+    updated.soNovember = dateStr;
+  } else if (month === '12') {
+    updated.soDesember = dateStr;
   } else if (month === '08') {
     updated.soAgustus = dateStr;
   } else if (month === '07') {
@@ -389,8 +409,12 @@ export function autoSyncStoreWithApprovedSchedule(
  * Extract target SO date for a store in a specific month and year reliably.
  * Handles specific month columns, generic scheduledDate/tglSo, day numbers, and Excel formats.
  */
-export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09', targetYear: string = '2026'): { isoDate: string; rawVal: string } {
-  if (!st) return { isoDate: '', rawVal: '' };
+export function extractStoreSODateForPeriod(
+  st: Store, 
+  targetMonth: string = getCurrentCalendarMonth(), 
+  targetYear: string = getCurrentCalendarYear()
+): { isoDate: string; rawVal: string; displayDate?: string } {
+  if (!st) return { isoDate: '', rawVal: '', displayDate: '' };
 
   const anySt = st as any;
   let rawDateVal = '';
@@ -432,6 +456,12 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
     if (m === '11' && isValValid(st.soNovember)) return String(st.soNovember);
     if (m === '12' && isValValid(st.soDesember)) return String(st.soDesember);
 
+    // Dynamic monthly history
+    if (st.monthlySOHistory) {
+      if (isValValid(st.monthlySOHistory[`${m}_${targetYear}`])) return String(st.monthlySOHistory[`${m}_${targetYear}`]);
+      if (isValValid(st.monthlySOHistory[m])) return String(st.monthlySOHistory[m]);
+    }
+
     // 2. Dynamic key search across any custom Excel headers
     const keywords = MONTH_KEYWORDS[m] || [];
     for (const key of Object.keys(anySt)) {
@@ -448,8 +478,8 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
 
   let resolvedMonth = targetMonth;
   if (targetMonth === 'ALL') {
-    // Look for any month that has a valid date, prioritizing September (09), August (08), October (10), etc.
-    const priorityMonths = ['09', '08', '10', '11', '12', '07', '06', '05', '04', '03', '02', '01'];
+    // Look for any month that has a valid date, prioritizing current calendar month, October (10), November (11), September (09), etc.
+    const priorityMonths = ['10', '11', '12', '09', '08', '07', '06', '05', '04', '03', '02', '01'];
     for (const m of priorityMonths) {
       const v = getMonthVal(m);
       if (isValValid(v)) {
@@ -462,12 +492,13 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
     rawDateVal = getMonthVal(targetMonth);
   }
 
-  const effectiveYear = (targetYear && targetYear !== 'ALL') ? targetYear : '2026';
+  const effectiveYear = (targetYear && targetYear !== 'ALL') ? targetYear : getCurrentCalendarYear();
+  const fallbackCalMonth = getCurrentCalendarMonth();
 
   // Check scheduledDate or tglSo if no specific month column matched
   if (!isValValid(rawDateVal)) {
     if (st.scheduledDate && isValValid(st.scheduledDate)) {
-      const parsedSched = parseCurrentMonthSODate(st.scheduledDate, resolvedMonth !== 'ALL' ? resolvedMonth : '09', effectiveYear);
+      const parsedSched = parseCurrentMonthSODate(st.scheduledDate, resolvedMonth !== 'ALL' ? resolvedMonth : fallbackCalMonth, effectiveYear);
       if (parsedSched.isValid) {
         const m = parsedSched.isoDate.split('-')[1];
         if (targetMonth === 'ALL' || m === targetMonth) {
@@ -477,7 +508,7 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
       }
     }
     if (!isValValid(rawDateVal) && st.tglSo && isValValid(st.tglSo)) {
-      const parsedTgl = parseCurrentMonthSODate(st.tglSo, resolvedMonth !== 'ALL' ? resolvedMonth : '09', effectiveYear);
+      const parsedTgl = parseCurrentMonthSODate(st.tglSo, resolvedMonth !== 'ALL' ? resolvedMonth : fallbackCalMonth, effectiveYear);
       if (parsedTgl.isValid) {
         const m = parsedTgl.isoDate.split('-')[1];
         if (targetMonth === 'ALL' || m === targetMonth) {
@@ -488,7 +519,7 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
     }
     // Also check generic 'TGL SO' or 'JADWAL SO' keys if still empty
     if (!isValValid(rawDateVal)) {
-      for (const k of ['TGL SO', 'TANGGAL SO', 'JADWAL SO', 'TGL_SO', 'Jadwal SO', 'TGL SO BALI', 'TGL SO SEP', 'TGL AUDIT', 'TGL AUDIT SO', 'TGL JADWAL', 'TGL JADWAL SO']) {
+      for (const k of ['TGL SO', 'TANGGAL SO', 'JADWAL SO', 'TGL_SO', 'Jadwal SO', 'TGL SO BALI', 'TGL SO OKT', 'TGL SO SEP', 'TGL AUDIT', 'TGL AUDIT SO', 'TGL JADWAL', 'TGL JADWAL SO']) {
         if (isValValid(anySt[k])) {
           rawDateVal = String(anySt[k]);
           break;
@@ -498,24 +529,25 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
   }
 
   if (!isValValid(rawDateVal)) {
-    return { isoDate: '', rawVal: '' };
+    return { isoDate: '', rawVal: '', displayDate: '' };
   }
 
-  // Helper to ensure returned date matches targetMonth if specified
+  // Helper to ensure returned date matches targetMonth if specified and includes displayDate
   const validateAndReturn = (iso: string, raw: string) => {
-    if (!iso) return { isoDate: '', rawVal: raw };
+    const disp = raw ? formatSmartSODate(raw, '-', resolvedMonth !== 'ALL' ? resolvedMonth : undefined, effectiveYear) : '';
+    if (!iso) return { isoDate: '', rawVal: raw, displayDate: disp };
     if (targetMonth !== 'ALL') {
       const parts = iso.split('-');
       if (parts.length >= 2 && parts[1] !== targetMonth) {
-        // Date belongs to another month (e.g. August when target is September)
-        return { isoDate: '', rawVal: raw };
+        // Date belongs to another month
+        return { isoDate: '', rawVal: raw, displayDate: disp };
       }
     }
-    return { isoDate: iso, rawVal: raw };
+    return { isoDate: iso, rawVal: raw, displayDate: disp };
   };
 
-  // 1. Primary parser: parseCurrentMonthSODate handles day numbers ("12"), Excel serials (46274), text ("12 Sep 2026"), slash, and dashes
-  const parsedCurrent = parseCurrentMonthSODate(rawDateVal, resolvedMonth !== 'ALL' ? resolvedMonth : '09', effectiveYear);
+  // 1. Primary parser: parseCurrentMonthSODate handles day numbers ("12"), Excel serials (46274), text ("12 Okt 2026"), slash, and dashes
+  const parsedCurrent = parseCurrentMonthSODate(rawDateVal, resolvedMonth !== 'ALL' ? resolvedMonth : fallbackCalMonth, effectiveYear);
   if (parsedCurrent.isValid && parsedCurrent.isoDate) {
     return validateAndReturn(parsedCurrent.isoDate, String(rawDateVal));
   }
@@ -525,7 +557,7 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
   if (tglMatch) {
     const d = parseInt(tglMatch[1], 10);
     if (d >= 1 && d <= 31) {
-      const safeMonth = (resolvedMonth && resolvedMonth !== 'ALL') ? resolvedMonth : '09';
+      const safeMonth = (resolvedMonth && resolvedMonth !== 'ALL') ? resolvedMonth : fallbackCalMonth;
       const iso = `${effectiveYear}-${safeMonth}-${String(d).padStart(2, '0')}`;
       return validateAndReturn(iso, String(rawDateVal));
     }
@@ -544,7 +576,7 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
   }
 
   // 4. parseSmartDateWithContext
-  const parsed = parseSmartDateWithContext(rawDateVal, resolvedMonth !== 'ALL' ? resolvedMonth : '09', effectiveYear);
+  const parsed = parseSmartDateWithContext(rawDateVal, resolvedMonth !== 'ALL' ? resolvedMonth : getCurrentCalendarMonth(), effectiveYear);
   if (parsed && !isNaN(parsed.getTime())) {
     const y = String(parsed.getFullYear());
     const m = String(parsed.getMonth() + 1).padStart(2, '0');
@@ -557,19 +589,126 @@ export function extractStoreSODateForPeriod(st: Store, targetMonth: string = '09
     return validateAndReturn(directIso, String(rawDateVal));
   }
 
-  return { isoDate: '', rawVal: String(rawDateVal) };
+  const fallbackDisp = rawDateVal ? formatSmartSODate(rawDateVal, '-', resolvedMonth !== 'ALL' ? resolvedMonth : undefined, effectiveYear) : '';
+  return { isoDate: '', rawVal: String(rawDateVal), displayDate: fallbackDisp };
+}
+
+/**
+ * Standard mapping of months to standard Master Toko Bali properties and headers
+ */
+export const MASTER_BALI_MONTH_CONFIGS = [
+  { month: '10', name: 'Oktober', standardCol: "SO OKTOBER '26", prop: 'soOktober' },
+  { month: '11', name: 'November', standardCol: "SO NOVEMBER '26", prop: 'soNovember' },
+  { month: '12', name: 'Desember', standardCol: "SO DESEMBER '26", prop: 'soDesember' },
+  { month: '09', name: 'September', standardCol: "SO SEPTEMBER '26", prop: 'soSeptember' },
+  { month: '08', name: 'Agustus', standardCol: "SO AGUSTUS '26", prop: 'soAgustus' },
+  { month: '07', name: 'Juli', standardCol: "SO JULI '26", prop: 'tglSoJuli' },
+  { month: '06', name: 'Juni', standardCol: "SO JUNI '26", prop: 'tglSoJuni' },
+  { month: '05', name: 'Mei', standardCol: "SO MEI '26", prop: 'tglSoMei' },
+  { month: '04', name: 'April', standardCol: "SO APRIL '26", prop: 'soApril' },
+  { month: '03', name: 'Maret', standardCol: "SO MARET '26", prop: 'soMaret' },
+  { month: '02', name: 'Februari', standardCol: "SO FEBRUARI '26", prop: 'soFebruari' },
+  { month: '01', name: 'Januari', standardCol: "SO JANUARI '26", prop: 'soJanuari' },
+] as const;
+
+/**
+ * Get monthly scheduling counts and statistics from Master Toko Bali stores
+ */
+export function getMasterStoresMonthStats(stores: Store[]) {
+  const stats: Record<string, { month: string; name: string; standardCol: string; scheduledCount: number; blankCount: number }> = {};
+  
+  MASTER_BALI_MONTH_CONFIGS.forEach(cfg => {
+    stats[cfg.month] = {
+      month: cfg.month,
+      name: cfg.name,
+      standardCol: cfg.standardCol,
+      scheduledCount: 0,
+      blankCount: 0
+    };
+  });
+
+  stores.forEach(st => {
+    MASTER_BALI_MONTH_CONFIGS.forEach(cfg => {
+      const ext = extractStoreSODateForPeriod(st, cfg.month);
+      const isScheduled = Boolean(
+        ext.isoDate || 
+        (ext.rawVal && ext.rawVal !== '-' && ext.rawVal !== '0' && ext.rawVal !== '0-jan-00' && !ext.rawVal.toLowerCase().includes('belum'))
+      );
+      if (isScheduled) {
+        stats[cfg.month].scheduledCount++;
+      } else {
+        stats[cfg.month].blankCount++;
+      }
+    });
+  });
+
+  return stats;
+}
+
+/**
+ * Set a store's SO date in the specific month column and history
+ */
+export function setStoreMonthSOValue(store: Store, month: string, dateStr: string, year?: string): Store {
+  const updated: Store = { ...store };
+  if (month === '10') updated.soOktober = dateStr;
+  else if (month === '09') updated.soSeptember = dateStr;
+  else if (month === '08') updated.soAgustus = dateStr;
+  else if (month === '11') updated.soNovember = dateStr;
+  else if (month === '12') updated.soDesember = dateStr;
+  else if (month === '07') updated.tglSoJuli = dateStr;
+  else if (month === '06') updated.tglSoJuni = dateStr;
+  else if (month === '05') updated.tglSoMei = dateStr;
+  else if (month === '04') updated.soApril = dateStr;
+  else if (month === '03') updated.soMaret = dateStr;
+  else if (month === '02') updated.soFebruari = dateStr;
+  else if (month === '01') updated.soJanuari = dateStr;
+
+  if (!updated.monthlySOHistory) updated.monthlySOHistory = {};
+  const y = year || (dateStr.includes('-') ? dateStr.split('-')[0] : getCurrentCalendarYear());
+  updated.monthlySOHistory[`${month}_${y}`] = dateStr;
+  updated.frekuensiTidakSO = calculateStoreFrekuensiTidakSO(updated, month);
+  return updated;
+}
+
+/**
+ * Clear a store's SO date in the specific month column
+ */
+export function clearStoreMonthSOValue(store: Store, month: string): Store {
+  const updated: Store = { ...store };
+  if (month === '10') updated.soOktober = '';
+  else if (month === '09') updated.soSeptember = '';
+  else if (month === '08') updated.soAgustus = '';
+  else if (month === '11') updated.soNovember = '';
+  else if (month === '12') updated.soDesember = '';
+  else if (month === '07') updated.tglSoJuli = '';
+  else if (month === '06') updated.tglSoJuni = '';
+  else if (month === '05') updated.tglSoMei = '';
+  else if (month === '04') updated.soApril = '';
+  else if (month === '03') updated.soMaret = '';
+  else if (month === '02') updated.soFebruari = '';
+  else if (month === '01') updated.soJanuari = '';
+
+  if (updated.monthlySOHistory) {
+    Object.keys(updated.monthlySOHistory).forEach(k => {
+      if (k.startsWith(`${month}_`) || k === month) {
+        delete updated.monthlySOHistory![k];
+      }
+    });
+  }
+  updated.frekuensiTidakSO = calculateStoreFrekuensiTidakSO(updated, month);
+  return updated;
 }
 
 /**
  * Intelligently generate and synchronize SOSchedules from Master Store monthly date columns
- * (e.g. SO SEPTEMBER '26 or SO AGUSTUS) when a new master file is uploaded or activated.
+ * (e.g. SO OKTOBER '26, SO SEPTEMBER '26 or SO AGUSTUS) when a new master file is uploaded or activated.
  * Correctly handles schedule date modifications from Excel without residual ghost schedules.
  */
 export function syncSchedulesFromMasterStores(
   stores: Store[], 
   existingSchedules: SOSchedule[],
-  targetMonth: string = '09',
-  targetYear: string = '2026',
+  targetMonth: string = getCurrentCalendarMonth(),
+  targetYear: string = getCurrentCalendarYear(),
   options?: {
     isReplaceMode?: boolean;
     results?: SOResult[];
@@ -906,15 +1045,15 @@ export function enrichScheduleWithMasterStore(schedule: SOSchedule, store?: Stor
 export function twoWaySyncStoresAndSchedules(
   stores: Store[],
   schedules: SOSchedule[],
-  month: string = '09',
-  year: string = '2026'
+  month: string = getCurrentCalendarMonth(),
+  year: string = getCurrentCalendarYear()
 ): { updatedStores: Store[]; updatedSchedules: SOSchedule[]; changesCount: number; staleScheduleIdsToDelete: string[] } {
   let changesCount = 0;
 
   // Resolve effective month and year (fallback intelligently if 'ALL' passed)
   const detected = detectSmartMonthAndYear([], stores);
-  const effectiveMonth = (month && month !== 'ALL') ? month : (detected.month || '09');
-  const effectiveYear = (year && year !== 'ALL') ? year : (detected.year || '2026');
+  const effectiveMonth = (month && month !== 'ALL') ? month : (detected.month || getCurrentCalendarMonth());
+  const effectiveYear = (year && year !== 'ALL') ? year : (detected.year || getCurrentCalendarYear());
 
   const storeMap = new Map<string, Store>();
   stores.forEach(s => {

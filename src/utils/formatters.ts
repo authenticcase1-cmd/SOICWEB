@@ -151,8 +151,8 @@ export function parseSmartDateWithContext(dateStr: any, contextMonth?: string, c
   if (tglMatch) {
     const day = parseInt(tglMatch[1], 10);
     if (day >= 1 && day <= 31) {
-      const effectiveMonth = contextMonth ? parseInt(contextMonth, 10) - 1 : 8; // default to Sep (month index 8)
-      const effectiveYear = contextYear ? parseInt(contextYear, 10) : 2026;
+      const effectiveMonth = contextMonth ? parseInt(contextMonth, 10) - 1 : (new Date().getMonth());
+      const effectiveYear = contextYear ? parseInt(contextYear, 10) : new Date().getFullYear();
       const dt = new Date(effectiveYear, effectiveMonth, day);
       if (!isNaN(dt.getTime())) return dt;
     }
@@ -293,10 +293,11 @@ export function formatSmartSODate(val: any, fallback: string = '-', contextMonth
   // Jika berupa angka tunggal 1 - 31 (misal tgl jadwal bulan berjalan: 15, 3, 28)
   const numOnly = Number(rawStr);
   if (!isNaN(numOnly) && numOnly >= 1 && numOnly <= 31 && Number.isInteger(numOnly)) {
+    const nowMonth = new Date().getMonth();
     const mName = contextMonth && parseInt(contextMonth, 10) >= 1 && parseInt(contextMonth, 10) <= 12
       ? ID_MONTH_NAMES[parseInt(contextMonth, 10) - 1]
-      : 'Sep';
-    const y = contextYear || '2026';
+      : ID_MONTH_NAMES[nowMonth];
+    const y = contextYear || String(new Date().getFullYear());
     return `${numOnly} ${mName} ${y}`;
   }
 
@@ -310,12 +311,18 @@ export function formatSmartSODate(val: any, fallback: string = '-', contextMonth
  */
 export function parseCurrentMonthSODate(
   val: any,
-  targetMonth: string = '09',
-  targetYear: string = '2026'
+  targetMonth?: string,
+  targetYear?: string
 ): { isoDate: string; displayDate: string; dayNumber: number | null; isValid: boolean } {
   if (val === null || val === undefined || val === '') {
     return { isoDate: '', displayDate: '', dayNumber: null, isValid: false };
   }
+
+  const now = new Date();
+  const defaultMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const defaultYear = String(now.getFullYear());
+  const effectiveM = (targetMonth && targetMonth !== 'ALL') ? targetMonth : defaultMonth;
+  const effectiveY = (targetYear && targetYear !== 'ALL') ? targetYear : defaultYear;
 
   let rawStr = String(val).trim();
   // Strip trailing decimal artifacts e.g. 15.0 -> 15
@@ -340,15 +347,14 @@ export function parseCurrentMonthSODate(
   if (tglMatch) {
     const d = parseInt(tglMatch[1], 10);
     if (d >= 1 && d <= 31) {
-      const mPad = (targetMonth && targetMonth !== 'ALL' ? targetMonth : '09').padStart(2, '0');
+      const mPad = effectiveM.padStart(2, '0');
       const dPad = String(d).padStart(2, '0');
-      const y = (targetYear && targetYear !== 'ALL' ? targetYear : '2026');
-      const iso = `${y}-${mPad}-${dPad}`;
+      const iso = `${effectiveY}-${mPad}-${dPad}`;
       const mIdx = parseInt(mPad, 10) - 1;
-      const mName = ID_MONTH_NAMES[mIdx] || 'Sep';
+      const mName = ID_MONTH_NAMES[mIdx] || 'Okt';
       return {
         isoDate: iso,
-        displayDate: `${d} ${mName} ${y}`,
+        displayDate: `${d} ${mName} ${effectiveY}`,
         dayNumber: d,
         isValid: true
       };
@@ -376,7 +382,7 @@ export function parseCurrentMonthSODate(
   }
 
   // 3. Natural Date string with context month & year
-  const parsed = parseSmartDateWithContext(rawStr, targetMonth !== 'ALL' ? targetMonth : '09', targetYear !== 'ALL' ? targetYear : '2026');
+  const parsed = parseSmartDateWithContext(rawStr, effectiveM, effectiveY);
   if (parsed && !isNaN(parsed.getTime())) {
     const y = parsed.getFullYear();
     const m = parsed.getMonth();
@@ -432,9 +438,57 @@ export function calculateLamaBekerja(joinDateStr: string, refDateStr?: string): 
   }
 }
 
+export const FULL_ID_MONTH_NAMES = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
+
+export function getFullMonthNameIndo(month: string | number): string {
+  const m = typeof month === 'number' ? month : parseInt(String(month), 10);
+  if (isNaN(m) || m < 1 || m > 12) return '';
+  return FULL_ID_MONTH_NAMES[m - 1];
+}
+
+/**
+ * Retail Audit Quarterly (Q) criteria helper:
+ * In a standard 3-month cycle rotation:
+ * Q1: Bulan 1 (Januari), Bulan 4 (April), Bulan 7 (Juli), Bulan 10 (Oktober)
+ * Q2: Bulan 2 (Februari), Bulan 5 (Mei), Bulan 8 (Agustus), Bulan 11 (November)
+ * Q3: Bulan 3 (Maret), Bulan 6 (Juni), Bulan 9 (September), Bulan 12 (Desember)
+ */
+export function getDefaultQTypeForMonth(month: string | number): 'Q1' | 'Q2' | 'Q3' {
+  const m = typeof month === 'number' ? month : parseInt(String(month), 10);
+  if (isNaN(m) || m < 1 || m > 12) return 'Q1';
+  const mod = (m - 1) % 3;
+  if (mod === 0) return 'Q1'; // 1, 4, 7, 10
+  if (mod === 1) return 'Q2'; // 2, 5, 8, 11
+  return 'Q3'; // 3, 6, 9, 12
+}
+
+/**
+ * Get the natural default target SO types for any given month
+ * E.g. Month 10 (Oktober) -> ['M', 'Q1']
+ *      Month 09 (September) -> ['M', 'Q3']
+ *      Month 08 (Agustus) -> ['M', 'Q2']
+ */
+export function getDefaultTargetSoTypes(month: string | number): string[] {
+  return ['M', getDefaultQTypeForMonth(month)];
+}
+
+export function getCurrentCalendarMonth(): string {
+  const now = new Date();
+  return String(now.getMonth() + 1).padStart(2, '0');
+}
+
+export function getCurrentCalendarYear(): string {
+  const now = new Date();
+  return String(now.getFullYear());
+}
+
 /**
  * Detect smart month and year from active master dataset and current stores
- * E.g. "MASTER JADWAL SEPTEMBER" or stores with soSeptember -> month '09', year '2026'
+ * E.g. "MASTER JADWAL OKTOBER" or stores with soOktober -> month '10', year '2026'
+ * Automatically advances to current calendar month (e.g. Oktober) when rolling over.
  */
 export function detectSmartMonthAndYear(
   datasets?: any[],
@@ -443,49 +497,32 @@ export function detectSmartMonthAndYear(
   fallbackYear?: string
 ): { month: string; year: string; source: 'active_dataset' | 'stores' | 'system_clock' } {
   const now = new Date();
-  const defaultMonth = fallbackMonth || String(now.getMonth() + 1).padStart(2, '0');
-  const defaultYear = fallbackYear || String(now.getFullYear());
+  const currentCalendarMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const currentCalendarYear = String(now.getFullYear());
+  const defaultMonth = fallbackMonth || currentCalendarMonth;
+  const defaultYear = fallbackYear || currentCalendarYear;
 
-  // 1. Check active dataset first
-  if (datasets && Array.isArray(datasets) && datasets.length > 0) {
-    const activeDataset = datasets.find(d => d.isActiveForScheduling) || datasets[0];
-    if (activeDataset) {
-      const textToSearch = `${activeDataset.title || ''} ${activeDataset.filename || ''} ${activeDataset.periodOrQuarter || ''} ${activeDataset.notes || ''}`.toLowerCase();
-      
-      // Match month keywords
-      for (const [key, mIndex] of Object.entries(INDO_MONTHS)) {
-        if (textToSearch.includes(key)) {
-          const detectedMonth = String(mIndex + 1).padStart(2, '0');
-          // Match year if present e.g. 2026 or 2025 or 2027
-          const yearMatch = textToSearch.match(/\b(20\d{2})\b/);
-          const detectedYear = yearMatch ? yearMatch[1] : defaultYear;
-          return { month: detectedMonth, year: detectedYear, source: 'active_dataset' };
-        }
-      }
-    }
-  }
-
-  // 2. Check stores content and frequency of dates across all months
+  // 1. First, check stores content and frequency of dates across all months
   if (stores && Array.isArray(stores) && stores.length > 0) {
     const monthCounts: Record<string, number> = {};
     let detectedStoreYear = defaultYear;
 
     stores.forEach(s => {
       // Check specific month fields
+      if (s.soOktober && s.soOktober !== '-' && s.soOktober !== '0' && !s.soOktober.toLowerCase().includes('belum')) {
+        monthCounts['10'] = (monthCounts['10'] || 0) + 1;
+      }
+      if (s.soNovember && s.soNovember !== '-' && s.soNovember !== '0' && !s.soNovember.toLowerCase().includes('belum')) {
+        monthCounts['11'] = (monthCounts['11'] || 0) + 1;
+      }
+      if (s.soDesember && s.soDesember !== '-' && s.soDesember !== '0' && !s.soDesember.toLowerCase().includes('belum')) {
+        monthCounts['12'] = (monthCounts['12'] || 0) + 1;
+      }
       if (s.soSeptember && s.soSeptember !== '-' && s.soSeptember !== '0' && !s.soSeptember.toLowerCase().includes('belum')) {
         monthCounts['09'] = (monthCounts['09'] || 0) + 1;
       }
       if (s.soAgustus && s.soAgustus !== '-' && s.soAgustus !== '0' && !s.soAgustus.toLowerCase().includes('belum')) {
         monthCounts['08'] = (monthCounts['08'] || 0) + 1;
-      }
-      if (s.soOktober && s.soOktober !== '-' && s.soOktober !== '0') {
-        monthCounts['10'] = (monthCounts['10'] || 0) + 1;
-      }
-      if (s.soNovember && s.soNovember !== '-' && s.soNovember !== '0') {
-        monthCounts['11'] = (monthCounts['11'] || 0) + 1;
-      }
-      if (s.soDesember && s.soDesember !== '-' && s.soDesember !== '0') {
-        monthCounts['12'] = (monthCounts['12'] || 0) + 1;
       }
       if (s.tglSoJuli && s.tglSoJuli !== '-' && s.tglSoJuli !== '0') {
         monthCounts['07'] = (monthCounts['07'] || 0) + 1;
@@ -509,19 +546,86 @@ export function detectSmartMonthAndYear(
       }
     });
 
-    let bestMonth = '';
-    let maxCount = 0;
-    Object.entries(monthCounts).forEach(([m, count]) => {
-      if (count > maxCount) {
-        maxCount = count;
-        bestMonth = m;
-      }
-    });
+    // Priority 1A: If current calendar month has dates in stores, strictly prioritize it!
+    if (monthCounts[currentCalendarMonth] && monthCounts[currentCalendarMonth] > 0) {
+      return { month: currentCalendarMonth, year: detectedStoreYear, source: 'stores' };
+    }
 
-    if (bestMonth && maxCount > 0) {
-      return { month: bestMonth, year: detectedStoreYear, source: 'stores' };
+    // Priority 1B: If current calendar month is October and October has dates, prioritize October
+    if (currentCalendarMonth === '10' && monthCounts['10'] && monthCounts['10'] > 0) {
+      return { month: '10', year: detectedStoreYear, source: 'stores' };
+    }
+
+    // Priority 1C: Check latest month (12 down to 01) that has filled dates
+    for (let m = 12; m >= 1; m--) {
+      const mStr = String(m).padStart(2, '0');
+      if (monthCounts[mStr] && monthCounts[mStr] > 0) {
+        return { month: mStr, year: detectedStoreYear, source: 'stores' };
+      }
     }
   }
 
-  return { month: defaultMonth, year: defaultYear, source: 'system_clock' };
+  // 2. Check active dataset next
+  if (datasets && Array.isArray(datasets) && datasets.length > 0) {
+    const activeDataset = datasets.find(d => d.isActiveForScheduling) || datasets[0];
+    if (activeDataset) {
+      const textToSearch = `${activeDataset.title || ''} ${activeDataset.filename || ''} ${activeDataset.periodOrQuarter || ''} ${activeDataset.notes || ''}`.toLowerCase();
+      
+      // Check stores inside activeDataset if available
+      if (Array.isArray(activeDataset.stores) && activeDataset.stores.length > 0) {
+        const hasOctInDatasetStores = activeDataset.stores.some((s: any) => 
+          s.soOktober && s.soOktober !== '-' && s.soOktober !== '0'
+        );
+        if (hasOctInDatasetStores) {
+          return { month: '10', year: currentCalendarYear, source: 'active_dataset' };
+        }
+      }
+
+      // Specific check for October / November / December in dataset metadata
+      const yearMatch = textToSearch.match(/\b(20\d{2})\b/);
+      const detectedYear = yearMatch ? yearMatch[1] : defaultYear;
+
+      if (textToSearch.includes('oktober') || textToSearch.includes('okt ') || textToSearch.includes('october') || textToSearch.includes('oct ')) {
+        return { month: '10', year: detectedYear, source: 'active_dataset' };
+      }
+      if (textToSearch.includes('november') || textToSearch.includes('nov ')) {
+        return { month: '11', year: detectedYear, source: 'active_dataset' };
+      }
+      if (textToSearch.includes('desember') || textToSearch.includes('des ')) {
+        return { month: '12', year: detectedYear, source: 'active_dataset' };
+      }
+
+      // If dataset is from a past month (e.g. September), but today is already a newer calendar month (e.g. October 2026),
+      // allow the system clock to advance to current calendar month (Oktober) automatically!
+      if (currentCalendarMonth === '10') {
+        return { month: '10', year: currentCalendarYear, source: 'system_clock' };
+      }
+
+      // Match other month keywords from latest to earliest
+      const monthSearchOrder: Array<[string, number]> = [
+        ['desember', 11], ['december', 11], ['des', 11],
+        ['november', 10], ['nov', 10],
+        ['oktober', 9], ['october', 9], ['okt', 9],
+        ['september', 8], ['sep', 8],
+        ['agustus', 7], ['august', 7], ['ags', 7],
+        ['juli', 6], ['july', 6], ['jul', 6],
+        ['juni', 5], ['june', 5], ['jun', 5],
+        ['mei', 4], ['may', 4],
+        ['april', 3], ['apr', 3],
+        ['maret', 2], ['march', 2], ['mar', 2],
+        ['februari', 1], ['february', 1], ['feb', 1],
+        ['januari', 0], ['january', 0], ['jan', 0]
+      ];
+
+      for (const [key, mIndex] of monthSearchOrder) {
+        if (textToSearch.includes(key)) {
+          const detectedMonth = String(mIndex + 1).padStart(2, '0');
+          return { month: detectedMonth, year: detectedYear, source: 'active_dataset' };
+        }
+      }
+    }
+  }
+
+  // 3. Fallback to current calendar system clock
+  return { month: currentCalendarMonth, year: currentCalendarYear, source: 'system_clock' };
 }

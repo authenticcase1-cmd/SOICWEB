@@ -42,7 +42,7 @@ export function parseCoordinates(rawInput: any): ParsedCoordinate {
 
   // 2. Try DMS Regex with S/N/E/W direction tags
   // Lat match: (S|N) then degrees, minutes, seconds OR degrees, minutes, seconds, (S|N)
-  const dmsLatMatch = cleanStr.match(/(S|N)\s*(\d{1-[23]|\d{1,2})\s+(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)/) ||
+  const dmsLatMatch = cleanStr.match(/(S|N)\s*(\d{1,2})\s+(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)/) ||
                       cleanStr.match(/(S|N)\s*(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)/) ||
                       cleanStr.match(/(\d{1,2})\s+(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)\s*(S|N)/) ||
                       cleanStr.match(/(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)\s*(S|N)/);
