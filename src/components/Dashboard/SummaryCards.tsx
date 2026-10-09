@@ -17,7 +17,13 @@ import {
   CalendarCheck2
 } from 'lucide-react';
 import { DashboardSummary } from '../../types/stockOpname';
-import { formatRupiah, formatNumber } from '../../utils/formatters';
+import { 
+  formatRupiah, 
+  formatNumber,
+  getFullMonthNameIndo,
+  getDefaultQTypeForMonth,
+  getDefaultTargetSoTypes
+} from '../../utils/formatters';
 
 interface SummaryCardsProps {
   summary: DashboardSummary;
@@ -25,21 +31,32 @@ interface SummaryCardsProps {
   onFilterZonaHitam?: () => void;
   targetSoTypes?: string[];
   onChangeTargetTypes?: (types: string[]) => void;
+  selectedMonth?: string;
+  selectedYear?: string;
 }
 
 export const SummaryCards: React.FC<SummaryCardsProps> = ({ 
   summary, 
   onNavigateTab, 
   onFilterZonaHitam,
-  targetSoTypes = ['M', 'Q3'],
-  onChangeTargetTypes
+  targetSoTypes = ['M', 'Q1'],
+  onChangeTargetTypes,
+  selectedMonth = '10',
+  selectedYear = '2026'
 }) => {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
+
+  const effectiveMonth = selectedMonth && selectedMonth !== 'ALL' ? selectedMonth : '10';
+  const effectiveYear = selectedYear && selectedYear !== 'ALL' ? selectedYear : '2026';
+  const monthNameIndo = getFullMonthNameIndo(effectiveMonth) || 'Oktober';
+  const naturalQType = getDefaultQTypeForMonth(effectiveMonth);
+  const naturalTargetTypes = getDefaultTargetSoTypes(effectiveMonth);
+  const yearShort = effectiveYear.slice(-2);
 
   const achPercentZona = summary.achievePercentZonaHitam ?? (summary.totalZonaHitam > 0 ? Math.round((summary.zonaHitamTerSO / summary.totalZonaHitam) * 100) : 0);
   const achPercentWajib = summary.achievePercentWajibSO ?? (summary.totalTokoWajibSO > 0 ? Math.round((summary.tokoWajibSOTerSO / summary.totalTokoWajibSO) * 100) : 0);
 
-  const ALL_POSSIBLE_TYPES = ['M', 'Q3', 'Q1', 'Q2'];
+  const ALL_POSSIBLE_TYPES = ['M', 'Q1', 'Q2', 'Q3'];
 
   const handleToggleType = (type: string) => {
     if (!onChangeTargetTypes) return;
@@ -52,9 +69,9 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
     }
   };
 
-  const handleSetPresetSeptember = () => {
+  const handleResetToNaturalMonthPreset = () => {
     if (onChangeTargetTypes) {
-      onChangeTargetTypes(['M', 'Q3']);
+      onChangeTargetTypes(naturalTargetTypes);
     }
   };
 
@@ -302,7 +319,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
               <p className="text-lg sm:text-xl font-black text-indigo-900 mt-0.5">
                 {formatNumber(summary.tokoTerjadwal ?? 0)} <span className="text-xs font-semibold text-indigo-600">Toko</span>
               </p>
-              <span className="text-[9px] text-indigo-600/80 font-medium">SO September &apos;26</span>
+              <span className="text-[9px] text-indigo-600/80 font-medium">SO {monthNameIndo} &apos;{yearShort}</span>
             </div>
             <div className="text-right">
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-200/60 text-indigo-800">
@@ -427,11 +444,11 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
                   Target Acuan Toko Wajib SO
                 </h4>
                 <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-500/30 text-indigo-200 px-2 py-0.5 rounded-md border border-indigo-400/40">
-                  Bulan September 2026: Type {targetSoTypes.join(' + ')}
+                  Bulan {monthNameIndo} {effectiveYear}: Type {targetSoTypes.join(' + ')}
                 </span>
               </div>
               <p className="text-xs text-slate-300 mt-0.5">
-                Perhitungan otomatis jumlah toko wajib SO berdasarkan kolom <code className="bg-slate-800 px-1 py-0.5 rounded text-amber-300 font-mono">Type SO</code> dan kolom tanggal <code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-300 font-mono">SO SEPTEMBER &apos;26</code>.
+                Perhitungan otomatis jumlah toko wajib SO berdasarkan kolom <code className="bg-slate-800 px-1 py-0.5 rounded text-amber-300 font-mono">Type SO</code> dan kolom tanggal <code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-300 font-mono">SO {monthNameIndo.toUpperCase()} &apos;{yearShort}</code>.
               </p>
             </div>
           </div>
@@ -466,10 +483,10 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({
 
             <button
               type="button"
-              onClick={handleSetPresetSeptember}
+              onClick={handleResetToNaturalMonthPreset}
               className="text-[11px] text-amber-300 hover:text-amber-200 underline font-semibold ml-1 cursor-pointer"
             >
-              Reset ke Acuan September (M + Q3)
+              Reset ke Acuan {monthNameIndo} (M + {naturalQType})
             </button>
           </div>
         </div>
