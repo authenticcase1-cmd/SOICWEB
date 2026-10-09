@@ -55,8 +55,15 @@ import {
   resetMasterAndSchedulesCleanly,
   resetSchedulesOnlyCleanly
 } from './services/storageService';
-import { ensureStoreCoordinates, autoSyncStoreRegionAndKabupaten } from './utils/geoUtils';
-import { formatSmartSODate, detectSmartMonthAndYear } from './utils/formatters';
+import { 
+  formatSmartSODate, 
+  detectSmartMonthAndYear, 
+  getDefaultTargetSoTypes, 
+  getDefaultQTypeForMonth, 
+  getFullMonthNameIndo,
+  getCurrentCalendarMonth,
+  getCurrentCalendarYear
+} from './utils/formatters';
 import { 
   autoSyncStoreWithApprovedSchedule, 
   syncSchedulesFromMasterStores, 
@@ -64,9 +71,12 @@ import {
   enrichScheduleWithMasterStore,
   calculateStoreFrekuensiTidakSO,
   getStoreSOApprovalStatus,
-  reconcileStoresWithExistingApprovals
+  reconcileStoresWithExistingApprovals,
+  clearStoreMonthSOValue,
+  setStoreMonthSOValue
 } from './utils/storeSyncUtils';
 import { normalizeKorlapName } from './utils/korlapUtils';
+import { autoSyncStoreRegionAndKabupaten } from './utils/geoUtils';
 import { 
   Store, 
   SOSchedule, 
@@ -611,21 +621,56 @@ export default function App() {
     return matchMonth && matchYear;
   });
 
-  // State for Target Toko Wajib SO criteria (Default: Type M & Q3 for September)
+  // State for Target Toko Wajib SO criteria (Intelligently adapts to active month: e.g. M + Q1 for Oktober, M + Q3 for September)
   const [targetSoTypes, setTargetSoTypes] = useState<string[]>(() => {
     const saved = localStorage.getItem('spv_target_so_types');
-    if (saved) {
+    const savedMonth = localStorage.getItem('spv_target_so_types_month');
+    if (saved && savedMonth === initialDateDetection.month) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch {}
     }
-    return ['M', 'Q3'];
+    return getDefaultTargetSoTypes(initialDateDetection.month);
   });
+
+  // Automatically adjust default target types when active month changes
+  useEffect(() => {
+    if (selectedMonth && selectedMonth !== 'ALL') {
+      const saved = localStorage.getItem('spv_target_so_types');
+      const savedMonth = localStorage.getItem('spv_target_so_types_month');
+      if (savedMonth === selectedMonth && saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTargetSoTypes(parsed);
+            return;
+          }
+        } catch {}
+      }
+      setTargetSoTypes(getDefaultTargetSoTypes(selectedMonth));
+    }
+  }, [selectedMonth]);
+
+  // Listen for auto-detected period from Google Spreadsheet sync or dataset updates
+  useEffect(() => {
+    const handlePeriodSynced = (e: any) => {
+      if (e?.detail?.month) {
+        setSelectedMonth(e.detail.month);
+        if (e.detail.year) setSelectedYear(e.detail.year);
+        setTargetSoTypes(getDefaultTargetSoTypes(e.detail.month));
+      }
+    };
+    window.addEventListener('spreadsheet_synced_period', handlePeriodSynced);
+    return () => window.removeEventListener('spreadsheet_synced_period', handlePeriodSynced);
+  }, []);
 
   const handleSetTargetSoTypes = (types: string[]) => {
     setTargetSoTypes(types);
     localStorage.setItem('spv_target_so_types', JSON.stringify(types));
+    if (selectedMonth && selectedMonth !== 'ALL') {
+      localStorage.setItem('spv_target_so_types_month', selectedMonth);
+    }
   };
 
   // Summary calculated dynamically based on filtered period and target SO types, strictly isolated by active month & year
@@ -667,12 +712,14 @@ export default function App() {
         if (fromDs) {
           // Master dataset has priority for schedule dates and assigned korlap
           const validMasterSep = isValValid(fromDs.soSeptember) ? fromDs.soSeptember : (isValValid(st.soSeptember) ? st.soSeptember : fromDs.soSeptember);
+          const validMasterOkt = isValValid(fromDs.soOktober) ? fromDs.soOktober : (isValValid(st.soOktober) ? st.soOktober : fromDs.soOktober);
           const validKorlap = (fromDs.korlap && fromDs.korlap !== 'Petugas SO') ? fromDs.korlap : (st.korlap || fromDs.korlap);
 
           mergedMap.set(key, {
             ...st,
             ...fromDs,
             soSeptember: validMasterSep,
+            soOktober: validMasterOkt,
             korlap: normalizeKorlapName(validKorlap) || validKorlap,
             managerName: normalizeKorlapName(validKorlap) || validKorlap,
             soAktiva: fromDs.soAktiva || st.soAktiva,
@@ -690,7 +737,7 @@ export default function App() {
 
     // Auto detect target month/year
     const detected = detectSmartMonthAndYear(datasets, baseStores);
-    const targetMonth = (selectedMonth && selectedMonth !== 'ALL') ? selectedMonth : (detected.month || '09');
+    const targetMonth = (selectedMonth && selectedMonth !== 'ALL') ? selectedMonth : (detected.month || '10');
     const targetYear = (selectedYear && selectedYear !== 'ALL') ? selectedYear : (detected.year || '2026');
 
     const result = twoWaySyncStoresAndSchedules(baseStores, schedules, targetMonth, targetYear);
@@ -767,16 +814,29 @@ export default function App() {
     setSchedules(updatedSchedules);
     saveSchedules(updatedSchedules);
 
-    // Sync back to Master Toko Bali (SO September)
+    // Sync back to Master Toko Bali (SO Oktober / SO September / bulan berjalan)
     if (targetStore) {
+      const schedMonth = enrichedSched.scheduledDate.split('-')[1] || selectedMonth || getCurrentCalendarMonth();
+      const schedYear = enrichedSched.scheduledDate.split('-')[0] || selectedYear || getCurrentCalendarYear();
+      const smartDate = formatSmartSODate(enrichedSched.scheduledDate, '-', schedMonth, schedYear);
+
       const updatedStores = stores.map(st => {
         if (st.id === targetStore.id || st.code === targetStore.code) {
-          const smartDate = formatSmartSODate(enrichedSched.scheduledDate);
-          return {
+          const copy = {
             ...st,
-            soSeptember: smartDate,
             tglSoApproved: enrichedSched.scheduledDate
           };
+          if (schedMonth === '10') {
+            copy.soOktober = smartDate;
+          } else if (schedMonth === '09') {
+            copy.soSeptember = smartDate;
+          } else if (schedMonth === '11') {
+            copy.soNovember = smartDate;
+          } else if (schedMonth === '12') {
+            copy.soDesember = smartDate;
+          }
+          copy.frekuensiTidakSO = calculateStoreFrekuensiTidakSO(copy, schedMonth);
+          return copy;
         }
         return st;
       });
@@ -795,17 +855,29 @@ export default function App() {
     setSchedules(updated);
     saveSchedules(updated);
 
-    // Sync back to Master Toko Bali (SO September)
+    // Sync back to Master Toko Bali for active month
     const newStoreMap = new Map(newSchedules.map(s => [s.storeCode, s.scheduledDate]));
     const updatedStores = stores.map(st => {
       if (newStoreMap.has(st.code)) {
         const schedDate = newStoreMap.get(st.code)!;
-        const smartDate = formatSmartSODate(schedDate);
-        return {
+        const schedMonth = schedDate.split('-')[1] || selectedMonth || getCurrentCalendarMonth();
+        const schedYear = schedDate.split('-')[0] || selectedYear || getCurrentCalendarYear();
+        const smartDate = formatSmartSODate(schedDate, '-', schedMonth, schedYear);
+        const copy = {
           ...st,
-          soSeptember: smartDate,
           tglSoApproved: schedDate
         };
+        if (schedMonth === '10') {
+          copy.soOktober = smartDate;
+        } else if (schedMonth === '09') {
+          copy.soSeptember = smartDate;
+        } else if (schedMonth === '11') {
+          copy.soNovember = smartDate;
+        } else if (schedMonth === '12') {
+          copy.soDesember = smartDate;
+        }
+        copy.frekuensiTidakSO = calculateStoreFrekuensiTidakSO(copy, schedMonth);
+        return copy;
       }
       return st;
     });
@@ -944,12 +1016,14 @@ export default function App() {
     saveSchedules(finalSchedules);
 
     // Synchronize Master Stores (Master Toko Bali)
+    const activePeriodMonth = (replacementDetails?.newDate ? replacementDetails.newDate.split('-')[1] : (originalSched.scheduledDate ? originalSched.scheduledDate.split('-')[1] : selectedMonth)) || getCurrentCalendarMonth();
+    const activePeriodYear = (replacementDetails?.newDate ? replacementDetails.newDate.split('-')[0] : (originalSched.scheduledDate ? originalSched.scheduledDate.split('-')[0] : selectedYear)) || getCurrentCalendarYear();
+
     const updatedStores = stores.map(st => {
       // 1. If this is the original store that failed / moved:
       // Active month date becomes BLANK, status is Belum SO, and Keterangan is populated
       if (st.code === originalSched.storeCode || st.id === originalSched.storeId) {
-        const copy = { ...st };
-        copy.soSeptember = ''; // Blank scheduled date for active month
+        let copy = clearStoreMonthSOValue(st, activePeriodMonth);
         copy.tglSoApproved = undefined;
         copy.statusApproveSO = 'Belum SO';
         if (actionType === 'Gagal SO') {
@@ -957,22 +1031,19 @@ export default function App() {
         } else {
           copy.keterangan = `Pindah Toko ke [${replacementDetails?.newStore.code}] ${replacementDetails?.newStore.name} - Alasan: ${reason || 'Perubahan Jadwal'}`;
         }
-        copy.frekuensiTidakSO = calculateStoreFrekuensiTidakSO(copy, '09');
         return copy;
       }
 
       // 2. If this is the destination / replacement store:
       // Synchronize date into active month column, whether it was blank or previously scheduled
       if (actionType === 'Pindah Toko' && replacementDetails && (st.code === replacementDetails.newStore.code || st.id === replacementDetails.newStore.id)) {
-        const copy = { ...st };
-        const smartDate = formatSmartSODate(replacementDetails.newDate);
-        copy.soSeptember = smartDate;
+        const smartDate = formatSmartSODate(replacementDetails.newDate, '-', activePeriodMonth, activePeriodYear);
+        let copy = setStoreMonthSOValue(st, activePeriodMonth, smartDate, activePeriodYear);
         copy.tglSoApproved = replacementDetails.newDate;
         copy.keterangan = `Jadwal Pengganti dari [${originalSched.storeCode}] ${originalSched.storeName} - Alasan: ${reason}`;
         if (originalSched.officerInCharge && originalSched.officerInCharge !== 'Petugas SO') {
           copy.korlap = originalSched.officerInCharge.split(' (')[0];
         }
-        copy.frekuensiTidakSO = calculateStoreFrekuensiTidakSO(copy, '09');
         return copy;
       }
 
@@ -1777,6 +1848,8 @@ export default function App() {
                 onNavigateTab={(tab) => setActiveTab(tab)}
                 targetSoTypes={targetSoTypes}
                 onChangeTargetTypes={handleSetTargetSoTypes}
+                selectedMonth={selectedMonth}
+                selectedYear={selectedYear}
               />
 
               {/* 2. General Schedule Metrics Widget (Terjadwal, Pindah, Gagal SO with Filters & Popups) */}
@@ -1929,6 +2002,8 @@ export default function App() {
               stores={stores}
               schedules={schedules}
               personnel={personnel}
+              selectedMonth={selectedMonth}
+              selectedYear={selectedYear}
               onApplyRelocation={(scheduleId, actionType, reason, replacementDetails) => {
                 handleGagalAtauPindahToko(scheduleId, actionType, reason, replacementDetails);
               }}
